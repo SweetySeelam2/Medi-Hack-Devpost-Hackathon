@@ -65,9 +65,9 @@ NUM_META = {
     "thalach":  {"label": "Maximum heart rate (bpm)",  "min": 60, "max": 230, "step": 1.0},
     "oldpeak":  {"label": "ST depression (mm)",        "min": 0.0,"max": 7.0, "step": 0.1},
 }
-SAMPLE = {  # canonical higher-risk example
-    "age": 63, "sex": 1, "cp": 3, "trestbps": 145, "chol": 233, "fbs": 1, "restecg": 0,
-    "thalach": 150, "exang": 1, "oldpeak": 2.3, "slope": 0, "ca": 2, "thal": 3
+SAMPLE = {  # higher-risk example designed to score High under 7%/35% defaults
+    "age": 67, "sex": 1, "cp": 3, "trestbps": 155, "chol": 290, "fbs": 1, "restecg": 1,
+    "thalach": 98, "exang": 1, "oldpeak": 3.6, "slope": 2, "ca": 3, "thal": 3
 }
 
 # ---------- Helpers ----------
@@ -230,7 +230,7 @@ DEFAULT_HI = 0.35
 
 show_sliders = st.sidebar.checkbox(
     "Show threshold sliders", value=True,
-    help="Turn off to hide the controls. Thresholds only affect action bands on Triage and Batch Scoring."
+    help="Thresholds do NOT change the model. They only map probability → action band on Triage & Batch Scoring."
 )
 
 if show_sliders:
@@ -257,7 +257,8 @@ with st.sidebar.expander("What are thresholds?", expanded=False):
 - **2) Triage (Diagnostics)** → the colored band under the probability  
 - **7) Batch Scoring** → the `risk_band` column in the CSV
 
-Suggested defaults: **Low \< {DEFAULT_LO:.0%}**, **Medium {DEFAULT_LO:.0%}–{DEFAULT_HI:.0%}**, **High ≥ {DEFAULT_HI:.0%}**.
+**Why 7% / 35%?** Operational triage heuristics: keep **High** a smaller subset needing rapid escalation (≥35%), and
+treat **Low** (<7%) as safe-to-monitor when resources are tight. Adjust for local prevalence and risk tolerance.
         """
     )
 
@@ -282,6 +283,24 @@ with st.sidebar.expander("Legend: what do dropdown codes mean?", expanded=False)
     _legend_line("ca (vessels by fluoroscopy)", CATS["ca"])
     _legend_line("thal (thalassemia)", CATS["thal"])
 
+# Clinical meaning & why-we-use-it (requested deeper explanations)
+with st.sidebar.expander("What each measurement means & why included", expanded=False):
+    st.markdown("""
+- **age** — older age raises atherosclerotic risk; baseline risk rises with age.  
+- **sex** — males show higher CAD prevalence in classic cohorts; coded 0=Female, 1=Male.  
+- **cp (chest pain type)** — typical/atypical angina history strength; asymptomatic can still be high-risk with silent ischemia.  
+- **trestbps (resting BP)** — sustained hypertension damages vessels → CAD risk.  
+- **chol (serum cholesterol)** — higher LDL/total cholesterol increases plaque formation.  
+- **fbs (fasting blood sugar)** — proxy for diabetes; diabetes accelerates vascular disease.  
+- **restecg** — ECG abnormalities reflect ischemia or hypertrophy burden.  
+- **thalach (max HR)** — lower achieved HR under stress may indicate limited cardiac reserve.  
+- **exang (exercise-induced angina)** — provoked chest pain suggests supply-demand mismatch.  
+- **oldpeak (ST depression)** — ECG depression with exercise is a classic ischemia marker.  
+- **slope (ST slope at peak)** — downsloping ST segments are more concerning.  
+- **ca (number of vessels)** — more vessels visualized suggests more disease burden.  
+- **thal (thalassemia test)** — abnormal perfusion defects associate with ischemia on nuclear imaging.
+    """)
+
 NAV_OPTIONS = [
     "1) Project Overview",
     "2) Triage (Diagnostics)",
@@ -302,7 +321,7 @@ if page == "1) Project Overview":
     st.subheader("Page 1 — Project Overview")
     st.markdown("""
 ### What this is
-**HeartRisk Assist** estimates **calibrated probability** of cardiac disease from routine measurements (UCI Heart).  
+**HeartRisk Assist** estimates **calibrated probability** of cardiac disease from routine measurements (Kaggle *Heart Disease UCI* CSV, deduped to **302 rows**).  
 It’s for **triage**, not diagnosis: helping decide who needs **faster work-up**.
 
 ### Business problem
@@ -330,29 +349,28 @@ elif page == "2) Triage (Diagnostics)":
     with st.expander("How to use", expanded=False):
         st.markdown(f"""
 1) Enter the measurements (or click **Load sample**).  
-2) Press **Assess risk** — you’ll get a **calibrated probability** and an **action band** based on the sidebar thresholds (**Low \< {lo:.0%}**, **Medium {lo:.0%}–{hi:.0%}**, **High ≥ {hi:.0%}**).  
+2) Press **Assess risk** — you’ll get a **calibrated probability** and an **action band** based on the sidebar thresholds (**Low < {lo:.0%}**, **Medium {lo:.0%}–{hi:.0%}**, **High ≥ {hi:.0%}**).  
 3) Visit **3) Explanations** for what pushed risk **up** or **down**.
         """)
 
-    # Rich, human-friendly tooltips/captions per field
+    # Rich tooltips: what + why
     tips = {
-        "sex": "Biological sex used as coded in the dataset (0 = Female, 1 = Male).",
-        "cp": "Chest pain type during presentation.",
-        "restecg": "Resting electrocardiogram result.",
-        "exang": "Exercise-induced angina during test.",
-        "slope": "Direction of the ST segment during peak exercise.",
-        "ca": "Number of major vessels (0–3) colored by fluoroscopy.",
-        "thal": "Thalassemia test result category.",
-        "thalach": "Maximum heart rate achieved in the test (beats per minute).",
-        "oldpeak": "ST depression induced by exercise relative to rest (mm).",
-        "trestbps": "Systolic blood pressure measured at rest (mm Hg).",
-        "chol": "Serum cholesterol (mg/dL).",
-        "age": "Age in completed years.",
+        "sex": "Biological sex (0 = Female, 1 = Male). Epidemiology differs by sex → affects baseline risk.",
+        "cp": "Chest pain type during presentation; typical angina weighs stronger for CAD risk.",
+        "restecg": "Resting electrocardiogram result; abnormalities suggest ischemia/hypertrophy.",
+        "exang": "Exercise-induced angina during test (0=No, 1=Yes).",
+        "slope": "Direction of the ST segment during peak exercise: downsloping is more concerning.",
+        "ca": "Number of major vessels (0–3) colored by fluoroscopy; higher counts ≈ greater disease burden.",
+        "thal": "Thalassemia/perfusion category; abnormal defects align with ischemia on imaging.",
+        "thalach": "Max heart rate achieved (bpm); lower values can indicate limited reserve.",
+        "oldpeak": "ST depression (mm) relative to rest; larger depression indicates ischemia.",
+        "trestbps": "Systolic blood pressure at rest (mm Hg); hypertension increases atherosclerotic risk.",
+        "chol": "Serum cholesterol (mg/dL); higher levels increase plaque formation.",
+        "age": "Age in years; risk increases with age.",
     }
 
     def option_caption(key):
         if key not in CATS: return ""
-        # e.g., "Options: Female (0); Male (1)"
         return "Options: " + "; ".join(str(v) for v in CATS[key].values())
 
     # Build the form
@@ -397,7 +415,6 @@ elif page == "2) Triage (Diagnostics)":
     if "last_prob" in st.session_state:
         prob = float(st.session_state["last_prob"])
         band = risk_band(prob, lo, hi)
-        # Friendly comparison text
         if prob < lo: relation, cut = "<", f"{lo:.0%}"
         elif prob < hi: relation, cut = "between", f"{lo:.0%} and {hi:.0%}"
         else: relation, cut = "≥", f"{hi:.0%}"
@@ -427,25 +444,30 @@ elif page == "3) Explanations":
         st.warning("Explanation currently unavailable for this configuration.")
     else:
         st.write(f"Explanation method: **{method}**")
+
+        # Vertical signed bar chart (up = higher risk, down = lower risk); labels horizontal
         chart = (
-            alt.Chart(contrib.assign(feature_order=np.arange(len(contrib))[::-1]))
+            alt.Chart(contrib)
               .mark_bar()
               .encode(
-                  x=alt.X("contribution:Q", title="Contribution to risk (signed)"),
-                  y=alt.Y("feature:N", sort="-x", title=None),
+                  x=alt.X("feature:N", sort=None, axis=alt.Axis(title=None, labelAngle=0)),
+                  y=alt.Y("contribution:Q", axis=alt.Axis(title="Contribution to risk (signed)")),
                   tooltip=["feature", alt.Tooltip("contribution:Q", format=".4f")]
               )
         )
-        zero_line = alt.Chart(pd.DataFrame({"x":[0]})).mark_rule(strokeDash=[4,4]).encode(x="x:Q")
-        st.altair_chart((chart + zero_line).properties(height=420), use_container_width=True)
+        zero_line = alt.Chart(pd.DataFrame({"y":[0]})).mark_rule(strokeDash=[4,4]).encode(y="y:Q")
+        st.altair_chart((zero_line + chart).properties(height=420), use_container_width=True)
 
+        # Plain-English bullets for the top 5
         st.markdown("#### Top drivers for this case")
         for _, r in contrib.head(5).iterrows():
             direction = "↑ increases" if r["contribution"] > 0 else "↓ decreases"
             st.markdown(f"- **{r['feature']}**: {direction} risk by ~{abs(r['contribution']):.3f} (relative units).")
 
-        st.caption("Positive bars push risk higher; negative bars reduce risk. "
-                   "If method shows *Importance-based (unsigned)*, direction may be approximated or unavailable.")
+        st.caption(
+            "Bars above zero pushed the probability upward; bars below zero pulled it down. "
+            "Use this to justify next steps (e.g., focus on abnormal ST changes or downsloping slope if they drive risk)."
+        )
     license_footer()
 
 # ---------- Page 4: FAIRNESS ----------
@@ -477,7 +499,7 @@ elif page == "4) Fairness (Ops)":
     )
     st.markdown("""
 **Operational guidance**
-- Track these slice AUCs over time; investigate gaps \>~0.05–0.10.
+- Track these slice AUCs over time; investigate gaps ≳0.05–0.10.
 - Mitigations: collect more data for under-served cohorts, reweight during training,
   or use **cohort-specific thresholds** with clinical oversight.
 - Post-deployment: audit periodically for drift and equity.
@@ -497,25 +519,32 @@ elif page == "5) Model Quality":
         st.image(str(ART / "roc.png"), use_column_width=True, caption="ROC curve (AUC)")
         st.markdown(
             f"- **AUC = {METRICS.get('auc', 0):.3f}** → ranks a random positive above a random negative about **{METRICS.get('auc', 0):.0%}** of the time.\n"
-            f"- **95% CI = [{METRICS.get('auc_ci', [0,0])[0]:.3f}, {METRICS.get('auc_ci', [0,0])[1]:.3f}]** indicates stability across resamples."
+            "- **How to use**: choose a threshold balancing **TPR** (sensitivity) vs **FPR** (false alarms). "
+            "For screening, accept a somewhat higher FPR to keep TPR high; for scarce resources, move threshold right."
         )
     with c2:
         st.image(str(ART / "pr.png"), use_column_width=True, caption="Precision–Recall (AUPRC)")
         st.markdown(
-            f"- **AUPRC = {METRICS.get('aupr', 0):.3f}** → average precision across recall levels; useful when positives are less common."
+            f"- **AUPRC = {METRICS.get('aupr', 0):.3f}** → average precision across recalls; baseline equals class prevalence.\n"
+            "- **How to use**: when positives are rarer, PR is more informative than ROC; ensure precision remains acceptable "
+            "at the recall level your clinic needs."
         )
 
     c3, c4 = st.columns(2)
     with c3:
         st.image(str(ART / "reliability.png"), use_column_width=True, caption="Reliability (Calibration)")
         st.markdown(
-            f"- **Brier score = {METRICS.get('brier', 0):.3f}** (lower is better). Post-isotonic dots near the diagonal → **trust probabilities**."
+            f"- **Brier score = {METRICS.get('brier', 0):.3f}** (lower is better). "
+            "Points near the diagonal mean **0.30 ≈ 30%** observed risk, etc. This enables meaningful **Low/Med/High bands**."
         )
     shap_img = ART / "shap_summary.png"
     with c4:
         if shap_img.exists():
             st.image(str(shap_img), use_column_width=True, caption="Global SHAP summary (top features)")
-            st.markdown("Bigger magnitude → stronger global influence; scatter color shows interactions.")
+            st.markdown(
+                "Bigger magnitude → stronger global influence; color scatter shows feature interactions. "
+                "Use this to sanity-check that medically plausible drivers (e.g., **oldpeak**, **slope**, **thal**) matter."
+            )
         else:
             st.info("Global SHAP summary not bundled; local explanations are on **3) Explanations**.")
 
@@ -538,11 +567,15 @@ elif page == "6) Data Explorer":
         )
 
         st.markdown("### Try a dataset row in TRIAGE")
-        st.caption(f"Enter a row index between 0 and **{len(DF_BG)-1}**, then send it to TRIAGE.")
-        idx = st.number_input("Row index", min_value=0, max_value=max(0, len(DF_BG)-1), value=4, step=1)
-        if st.button("Send selected row to TRIAGE"):
-            push_row_to_triage(DF_BG.iloc[int(idx)][FEATURES].to_dict())
-            st.rerun()
+        st.caption(
+            "Pick a row from the training CSV and send it to **2) Triage**. "
+            "This lets you see how a **real patient profile** from the dataset scores and which features drive the decision."
+        )
+        if DF_BG is not None and len(DF_BG) > 0:
+            idx = st.selectbox("Row index", options=list(range(len(DF_BG))), index=min(4, len(DF_BG)-1))
+            if st.button("Send selected row to TRIAGE"):
+                push_row_to_triage(DF_BG.iloc[int(idx)][FEATURES].to_dict())
+                st.rerun()
 
     license_footer()
 
@@ -584,7 +617,7 @@ elif page == "7) Batch Scoring":
 elif page == "8) Privacy & Trust":
     st.subheader("Page 8 — Privacy-first & Trust")
     st.markdown("""
-- No PHI used. Model trained on a public, de-identified dataset (UCI Heart).
+- No PHI used. Model trained on the **Kaggle Heart Disease UCI** CSV (public, de-identified).
 - All predictions computed locally on this app/server.
 - Transparent outputs: **calibrated probabilities** + **fairness dashboards**.
 - **Limits**: small dataset; possible cohort bias; domain shift in other settings.
@@ -602,8 +635,8 @@ else:
 - Equity watchpoint: **older patients (>60)** show somewhat lower discrimination (**AUC {age_gt60:.3f}**) vs **45–60** (**AUC {age_45_60:.3f}**).
 
 ### Operational Value (order-of-magnitude)
-Assume 2,000 visits/month; 15% suspected cardiac; \$600 avg downstream test.  
-A calibrated triage cutting unnecessary follow-ups by **5–8%** (holding sensitivity) saves **\$9k–\$14k/month** and frees clinician time.
+Assume 2,000 visits/month; 15% suspected cardiac; $600 avg downstream test.  
+A calibrated triage cutting unnecessary follow-ups by **5–8%** (holding sensitivity) saves **$9k–$14k/month** and frees clinician time.
 
 ### Recommendations
 1. **Adopt calibrated thresholds** tuned to site prevalence (defaults **7% / 35%** are a starting point).  
