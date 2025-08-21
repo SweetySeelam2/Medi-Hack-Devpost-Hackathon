@@ -1,0 +1,78 @@
+## Project Title
+**HeartRisk Assist — Calibrated, Fair, Privacy-First Cardiac Triage**
+
+### Elevator pitch (30s)
+HeartRisk Assist gives clinicians a **calibrated probability** of cardiac risk, **fairness slice metrics**, and **point-of-care explanations** in one simple Streamlit app. It’s fast, transparent, and privacy-respecting—perfect for triage support and operations dashboards.
+
+### Tracks
+- AI for Diagnostics  
+- Healthcare Operations (equity & calibration)  
+- Mental Health & Privacy (trust-first framing)
+
+---
+
+## What it does
+- Predicts a **calibrated risk** of heart disease from 13 common inputs.
+- Explains each prediction (SHAP) so clinicians see **why**.
+- Surfaces **equity metrics** (slice AUCs by sex, age bucket, chest-pain type).
+- Shows **ROC/PR and reliability** so stakeholders can judge utility & trust.
+- Batch scores CSVs; one-click sample for demo.
+
+---
+
+## Why it matters
+Triage is often noisy and resource-strained. Even modest improvements in calibrated risk stratification can reduce unnecessary testing and speed up care. The app’s **calibration + fairness** makes performance legible to both clinicians and operations leaders.
+
+---
+
+## How we built it
+- **Data:** UCI Heart (public, de-identified); deduplicated to 302 rows for a clean baseline.
+- **Modeling:** ColumnTransformer (scale numeric + one-hot categorical) → candidates (LogReg, RF) chosen by 5-fold CV AUC → **isotonic calibration** on a held-out fold → test evaluation.
+- **Explainability:** SHAP (`TreeExplainer` for RF, `LinearExplainer` for LR) with robust fallbacks.
+- **App:** Streamlit multi-page UX with triage, explanations, fairness, model quality, and batch scoring.
+
+---
+
+## Results
+- **AUC:** 0.878 | **AUPRC:** 0.886 | **Brier:** 0.144 | **AUC 95% CI:** [0.789, 0.949]  
+- **Slice AUCs:** sex (F 0.846, M 0.871), age 45–60 (0.878), >60 (0.752), cp=0 (0.849).  
+Plots: ROC, PR, reliability, and global SHAP summary are included in the repo under `artifacts/`. :contentReference[oaicite:2]{index=2}
+
+**Takeaway:** Useful discrimination and reasonable calibration; older cohort needs additional data or thresholds—exactly the kind of insight an ops dashboard should surface.
+
+---
+
+## Challenges
+- **Windows long-path & binary wheels**: resolved by enabling long paths and keeping venv shallow.
+- **SHAP with calibrated models**: had to unwrap the calibrated pipeline to explain the underlying estimator.
+- **Overfitting risk on tiny data**: constrained RF grid; used external calibration and CI via bootstrap.
+
+---
+
+## What we’re proud of
+- A **cohesive, demo-ready** workflow that blends diagnostics, fairness, and trust.  
+- **Fully reproducible** artifacts and an app anyone can run locally.
+
+---
+
+## What’s next
+- Retrain on **MIMIC-IV / PhysioNet** cohorts with site governance.
+- Add **threshold-setting tools** by cohort (cost curves / decision curves).
+- Integrate clinician feedback and **post-deployment monitoring**.
+
+---
+
+## Try it
+- **Code:** https://github.com/SweetySeelam2/Medi-Hack-Devpost-Hackathon  
+- **Run locally:** `streamlit run app.py` (see README for full steps).  
+- **Demo video:** *(attach 2–5 min screen capture of training notebook + Streamlit walkthrough)*
+
+---
+
+## Team
+Solo: **Sweety Seelam**
+
+---
+
+## Built with
+Python, scikit-learn, SHAP, pandas, numpy, matplotlib, Streamlit
