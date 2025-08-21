@@ -6,6 +6,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import streamlit as st
+import altair as alt
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.pipeline import Pipeline
 
@@ -51,7 +52,7 @@ CATS = {
     "sex":    {0: "Female (0)", 1: "Male (1)"},
     "cp":     {0: "Typical angina (0)", 1: "Atypical angina (1)", 2: "Non-anginal pain (2)", 3: "Asymptomatic (3)"},
     "fbs":    {0: "Fasting blood sugar ≤ 120 mg/dL (0)", 1: "Fasting blood sugar > 120 mg/dL (1)"},
-    "restecg":{0: "Normal (0)", 1: "ST-T wave abnormality (1)", 2: "LV hypertrophy (2)"},
+    "restecg":{0: "Normal (0)", 1: "ST-T wave abnormality (1)", 2: "Left ventricular hypertrophy (2)"},
     "exang":  {0: "No (0)", 1: "Yes (1)"},
     "slope":  {0: "Upsloping (0)", 1: "Flat (1)", 2: "Downsloping (2)"},
     "ca":     {0: "0", 1: "1", 2: "2", 3: "3"},
@@ -59,9 +60,9 @@ CATS = {
 }
 NUM_META = {
     "age":      {"label": "Age (years)",               "min": 18, "max": 95,  "step": 1.0},
-    "trestbps": {"label": "Resting BP (mm Hg)",        "min": 80, "max": 220, "step": 1.0},
+    "trestbps": {"label": "Resting blood pressure (mm Hg)", "min": 80, "max": 220, "step": 1.0},
     "chol":     {"label": "Serum cholesterol (mg/dL)", "min": 100,"max": 600, "step": 1.0},
-    "thalach":  {"label": "Max heart rate (bpm)",      "min": 60, "max": 230, "step": 1.0},
+    "thalach":  {"label": "Maximum heart rate (bpm)",  "min": 60, "max": 230, "step": 1.0},
     "oldpeak":  {"label": "ST depression (mm)",        "min": 0.0,"max": 7.0, "step": 0.1},
 }
 SAMPLE = {  # canonical higher-risk example
@@ -84,7 +85,6 @@ def unwrap_to_fitted_pipeline(model):
     Falls back to PREPROC fitted on background data for explanations only.
     """
     est = model
-    # Unwrap calibrated model to the underlying estimator
     if isinstance(model, CalibratedClassifierCV):
         if getattr(model, "calibrated_classifiers_", None):
             cc = model.calibrated_classifiers_[0]
@@ -99,7 +99,6 @@ def unwrap_to_fitted_pipeline(model):
             raise RuntimeError("Pipeline missing expected 'pre'/'clf' steps.")
         return pre, clf, est
 
-    # Fallback path: use saved PREPROC for explanation-only transforms
     pre = PREPROC
     if pre is None:
         raise RuntimeError("No preprocessor available for explanations.")
@@ -110,24 +109,56 @@ def unwrap_to_fitted_pipeline(model):
     clf = est
     return pre, clf, None
 
+def _predict_proba(clf, X):
+    if hasattr(clf, "predict_proba"):
+        return np.asarray(clf.predict_proba(X))[:, 1]
+    if hasattr(clf, "decision_function"):
+        z = np.asarray(clf.decision_function(X)).ravel()
+        return 1 / (1 + np.exp(-z))
+    raise RuntimeError("Classifier has neither predict_proba nor decision_function.")
+
 def risk_band(prob, lo, hi):
     if prob < lo: return "Low"
     if prob < hi: return "Medium"
     return "High"
 
+def signed_contrib_without_shap(pre, clf, x_df, feat_names):
+    """
+    Directional local contributions when SHAP isn't available.
+    For each transformed feature j, replace it with the background mean and
+    measure the probability drop: contrib[j] = base_prob - prob_with_feature_replaced.
+    Positive => pushes risk UP; Negative => pushes risk DOWN.
+    """
+    Xt = pre.transform(x_df[FEATURES])
+    Xrow = Xt.toarray() if hasattr(Xt, "toarray") else np.asarray(Xt)
+    if DF_BG is not None:
+        Xbg = pre.transform(DF_BG[FEATURES])
+        Xbg = Xbg.toarray() if hasattr(Xbg, "toarray") else np.asarray(Xbg)
+        mu = Xbg.mean(axis=0)
+    else:
+        mu = np.zeros(Xrow.shape[1])
+
+    base = float(_predict_proba(clf, Xrow)[0])
+    contribs = []
+    for j in range(Xrow.shape[1]):
+        Xalt = Xrow.copy()
+        Xalt[0, j] = mu[j]
+        p_alt = float(_predict_proba(clf, Xalt)[0])
+        contribs.append(base - p_alt)
+
+    df = (pd.DataFrame({"feature": feat_names, "contribution": contribs})
+            .sort_values("contribution", key=np.abs, ascending=False).head(15))
+    return "Directional (mean-replacement)", df
+
 def explain_single(x_df):
     """
     Returns (method_str, pd.DataFrame of top contributions) for a single-row input.
-    Tries SHAP first; falls back to coefficients/feature importances.
+    Tries SHAP first; falls back to directional contributions; then coefficients/importances.
     """
     pre, clf, _ = unwrap_to_fitted_pipeline(MODEL)
-
-    # Transform into model feature space
     Xt = pre.transform(x_df[FEATURES])
     feat_names = list(getattr(pre, "get_feature_names_out", lambda *_: FEATURES)(FEATURES))
-    row_dense = Xt.toarray()[0] if hasattr(Xt, "toarray") else np.asarray(Xt)[0]
 
-    # Try SHAP
     try:
         import shap
         bg = DF_BG.sample(min(len(DF_BG), 200), random_state=42) if DF_BG is not None else x_df[FEATURES].copy()
@@ -135,12 +166,12 @@ def explain_single(x_df):
         if hasattr(Xbg, "toarray"): Xbg = Xbg.toarray()
         Xtd = Xt.toarray() if hasattr(Xt, "toarray") else np.asarray(Xt)
 
-        if hasattr(clf, "estimators_"):            # Tree models
+        if hasattr(clf, "estimators_"):
             explainer = shap.TreeExplainer(clf)
-            sv = explainer.shap_values(Xtd)        # list for binary: [neg, pos]
+            sv = explainer.shap_values(Xtd)
             vals = (np.asarray(sv[1])[0] if isinstance(sv, list) else np.asarray(sv)[0])
             method = "SHAP (TreeExplainer)"
-        else:                                      # Linear models
+        else:
             explainer = shap.LinearExplainer(clf, Xbg)
             try:
                 exp = explainer(Xtd)
@@ -155,31 +186,32 @@ def explain_single(x_df):
         return method, contrib
 
     except Exception:
-        # Robust fallbacks if SHAP is missing or fails
-        if hasattr(clf, "coef_"):
-            vals = row_dense * clf.coef_[0]
-            method = "Coefficient-based"
-        elif hasattr(clf, "feature_importances_"):
-            vals = row_dense * clf.feature_importances_
-            method = "Importance-based"
-        else:
-            return "Unavailable", pd.DataFrame(columns=["feature", "contribution"])
-
-        contrib = (pd.DataFrame({"feature": feat_names, "contribution": vals})
-                   .sort_values("contribution", key=np.abs, ascending=False)
-                   .head(15))
-        return method, contrib
+        try:
+            return signed_contrib_without_shap(pre, clf, x_df, feat_names)
+        except Exception:
+            Xtd = Xt.toarray() if hasattr(Xt, "toarray") else np.asarray(Xt)
+            row = Xtd[0]
+            if hasattr(clf, "coef_"):
+                vals = row * clf.coef_[0]
+                method = "Coefficient-based"
+            elif hasattr(clf, "feature_importances_"):
+                vals = row * clf.feature_importances_
+                method = "Importance-based (unsigned)"
+            else:
+                return "Unavailable", pd.DataFrame(columns=["feature", "contribution"])
+            contrib = (pd.DataFrame({"feature": feat_names, "contribution": vals})
+                       .sort_values("contribution", key=np.abs, ascending=False)
+                       .head(15))
+            return method, contrib
 
 def fill_sample():
     for k, v in SAMPLE.items():
         st.session_state[k] = v
 
 def queue_nav(page_name: str):
-    """Schedule a page jump on the next rerun (Streamlit-safe)."""
     st.session_state["pending_nav"] = page_name
 
 def apply_pending_nav():
-    """If a jump was queued, switch the radio selection before rendering it."""
     if "pending_nav" in st.session_state:
         target = st.session_state.pop("pending_nav")
         st.session_state["nav"] = target
@@ -187,72 +219,149 @@ def apply_pending_nav():
 def push_row_to_triage(row_dict):
     for k, v in row_dict.items():
         st.session_state[k] = v
-    queue_nav("Triage (Diagnostics)")
+    queue_nav("2) Triage (Diagnostics)")
 
 # ---------- Sidebar controls ----------
-st.sidebar.header("Risk Thresholds")
-# Sensible defaults for calibrated clinical triage
-lo = st.sidebar.slider("Low/Medium cutoff", 0.00, 0.50, 0.07, 0.01)
-hi = st.sidebar.slider("Medium/High cutoff", 0.20, 0.90, 0.35, 0.01)
-if hi <= lo:
-    st.sidebar.error("Medium/High cutoff must be > Low/Medium cutoff.")
+# A cleaner, more useful sidebar with optional sliders + live preview
+st.sidebar.header("Risk Settings")
+
+DEFAULT_LO = 0.07
+DEFAULT_HI = 0.35
+
+show_sliders = st.sidebar.checkbox(
+    "Show threshold sliders", value=True,
+    help="Turn off to hide the controls. Thresholds only affect action bands on Triage and Batch Scoring."
+)
+
+if show_sliders:
+    lo = st.sidebar.slider("Low/Medium cutoff", 0.00, 0.50, float(st.session_state.get("lo", DEFAULT_LO)), 0.01,
+                           help="Probabilities below this are labeled **Low**.")
+    hi = st.sidebar.slider("Medium/High cutoff", 0.20, 0.90, float(st.session_state.get("hi", DEFAULT_HI)), 0.01,
+                           help="Probabilities at/above this are labeled **High**.")
+    if st.sidebar.button("Reset to defaults (7% / 35%)"):
+        lo, hi = DEFAULT_LO, DEFAULT_HI
+else:
+    lo = float(st.session_state.get("lo", DEFAULT_LO))
+    hi = float(st.session_state.get("hi", DEFAULT_HI))
+    st.sidebar.info(f"Using thresholds • Low < **{lo:.0%}** • High ≥ **{hi:.0%}**")
+
 st.session_state["lo"] = lo
 st.session_state["hi"] = hi
+if hi <= lo:
+    st.sidebar.error("Medium/High cutoff must be > Low/Medium cutoff.")
 
 with st.sidebar.expander("What are thresholds?", expanded=False):
     st.markdown(
         f"""
-Map a **calibrated probability** into an action band:
+**These do not change the model.** They map a **calibrated probability** to an **action band** used on:
+- **2) Triage (Diagnostics)** → the colored band under the probability  
+- **7) Batch Scoring** → the `risk_band` column in the CSV
 
-- **Low**: p \< {lo:.0%} → routine prevention & monitoring  
-- **Medium**: {lo:.0%} ≤ p \< {hi:.0%} → consider non-invasive tests; clinician review  
-- **High**: p ≥ {hi:.0%} → prompt clinician evaluation
-
-Tune these to your clinic’s prevalence and risk tolerance.
+Suggested defaults: **Low \< {DEFAULT_LO:.0%}**, **Medium {DEFAULT_LO:.0%}–{DEFAULT_HI:.0%}**, **High ≥ {DEFAULT_HI:.0%}**.
         """
     )
 
+# Live band preview so sliders feel meaningful
+if "last_prob" in st.session_state:
+    lp = float(st.session_state["last_prob"])
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**Live band preview (last prediction)**")
+    st.sidebar.write(f"Prob = **{lp:.1%}** → **{risk_band(lp, lo, hi)}** with current thresholds.")
+
+# Quick legend for dropdown codes (clear meanings)
+with st.sidebar.expander("Legend: what do dropdown codes mean?", expanded=False):
+    def _legend_line(name, mapping):
+        items = "; ".join(str(v) for v in mapping.values())
+        st.markdown(f"**{name}** — {items}")
+    _legend_line("sex", CATS["sex"])
+    _legend_line("cp (chest pain)", CATS["cp"])
+    _legend_line("fbs (fasting blood sugar)", CATS["fbs"])
+    _legend_line("restecg (rest ECG)", CATS["restecg"])
+    _legend_line("exang (exercise-induced angina)", CATS["exang"])
+    _legend_line("slope (ST segment slope)", CATS["slope"])
+    _legend_line("ca (vessels by fluoroscopy)", CATS["ca"])
+    _legend_line("thal (thalassemia)", CATS["thal"])
+
 NAV_OPTIONS = [
-    "Triage (Diagnostics)", "Explanations", "Fairness (Ops)",
-    "Model Quality", "Batch Scoring", "Data Explorer", "Privacy & Trust",
-    "Impact & Recommendations"
+    "1) Project Overview",
+    "2) Triage (Diagnostics)",
+    "3) Explanations",
+    "4) Fairness (Ops)",
+    "5) Model Quality",
+    "6) Data Explorer",
+    "7) Batch Scoring",
+    "8) Privacy & Trust",
+    "9) Impact & Recommendations",
 ]
 
-# Apply any queued navigation BEFORE creating the radio (prevents state errors)
 apply_pending_nav()
 page = st.sidebar.radio("Go to", NAV_OPTIONS, key="nav")
 
-# ---------- Page: TRIAGE ----------
-if page == "Triage (Diagnostics)":
-    st.subheader("Enter measurements")
+# ---------- Page 1: PROJECT OVERVIEW ----------
+if page == "1) Project Overview":
+    st.subheader("Page 1 — Project Overview")
+    st.markdown("""
+### What this is
+**HeartRisk Assist** estimates **calibrated probability** of cardiac disease from routine measurements (UCI Heart).  
+It’s for **triage**, not diagnosis: helping decide who needs **faster work-up**.
+
+### Business problem
+High volumes + scarce cardiology slots → over-triage wastes resources; under-triage is unsafe.  
+We need **well-calibrated probabilities**, **clear explanations**, and **fairness monitoring**.
+
+### Goals
+Calibrate probabilities; explain each prediction; monitor fairness; keep PHI out; allow tunable thresholds.
+
+### Dataset
+After removing duplicates: **302 rows**, 14 features.  
+Features: `age, sex, cp, trestbps, chol, fbs, restecg, thalach, exang, oldpeak, slope, ca, thal`.
+
+### App map
+- **2) Triage** → probability + action band (uses sidebar thresholds).  
+- **3) Explanations** → signed bars for this case.  
+- **4–5)** Fairness & quality. **6–7)** Data & batch scoring. **8–9)** Privacy & impact.
+""")
+    license_footer()
+
+# ---------- Page 2: TRIAGE ----------
+elif page == "2) Triage (Diagnostics)":
+    st.subheader("Page 2 — Triage (Diagnostics)")
 
     with st.expander("How to use", expanded=False):
-        st.markdown("""
-1) Enter routine measurements below (or click **Load sample (High risk)**).  
-2) Click **Assess risk** → you’ll see a **calibrated probability** and **risk band** driven by the sidebar thresholds.  
-3) Open **Explanations** to see which features pushed risk up or down for the last case.
+        st.markdown(f"""
+1) Enter the measurements (or click **Load sample**).  
+2) Press **Assess risk** — you’ll get a **calibrated probability** and an **action band** based on the sidebar thresholds (**Low \< {lo:.0%}**, **Medium {lo:.0%}–{hi:.0%}**, **High ≥ {hi:.0%}**).  
+3) Visit **3) Explanations** for what pushed risk **up** or **down**.
         """)
 
+    # Rich, human-friendly tooltips/captions per field
     tips = {
-        "sex": "Biological sex (0=Female, 1=Male).",
-        "cp": "Chest pain type: 0=Typical, 1=Atypical, 2=Non-anginal, 3=Asymptomatic.",
-        "restecg": "Resting ECG: 0=Normal, 1=ST-T abnormality, 2=LV hypertrophy.",
-        "exang": "Exercise-induced angina: 0=No, 1=Yes.",
-        "slope": "Slope of peak exercise ST segment: 0=Upsloping, 1=Flat, 2=Downsloping.",
-        "ca": "# major vessels (0–3) colored by fluoroscopy.",
-        "thal": "Thalassemia: 0=Unknown, 1=Fixed defect, 2=Normal, 3=Reversible defect.",
-        "thalach": "Maximum heart rate achieved (bpm).",
+        "sex": "Biological sex used as coded in the dataset (0 = Female, 1 = Male).",
+        "cp": "Chest pain type during presentation.",
+        "restecg": "Resting electrocardiogram result.",
+        "exang": "Exercise-induced angina during test.",
+        "slope": "Direction of the ST segment during peak exercise.",
+        "ca": "Number of major vessels (0–3) colored by fluoroscopy.",
+        "thal": "Thalassemia test result category.",
+        "thalach": "Maximum heart rate achieved in the test (beats per minute).",
         "oldpeak": "ST depression induced by exercise relative to rest (mm).",
+        "trestbps": "Systolic blood pressure measured at rest (mm Hg).",
+        "chol": "Serum cholesterol (mg/dL).",
+        "age": "Age in completed years.",
     }
 
-    # Build the form with friendly widgets
+    def option_caption(key):
+        if key not in CATS: return ""
+        # e.g., "Options: Female (0); Male (1)"
+        return "Options: " + "; ".join(str(v) for v in CATS[key].values())
+
+    # Build the form
     with st.form("triage_form", clear_on_submit=False):
         cols = st.columns(3)
         vals = {}
-
         for i, f in enumerate(FEATURES):
             with cols[i % 3]:
-                if f in CATS:  # categorical with labels
+                if f in CATS:
                     default_code = int(st.session_state.get(f, SAMPLE.get(f, list(CATS[f].keys())[0])))
                     vals[f] = st.selectbox(
                         f, options=list(CATS[f].keys()),
@@ -260,43 +369,42 @@ if page == "Triage (Diagnostics)":
                         format_func=lambda k, _f=f: CATS[_f][k],
                         help=tips.get(f, "")
                     )
-                else:          # numeric with sensible bounds
+                    st.caption(tips.get(f, ""))
+                    st.caption(option_caption(f))
+                else:
                     meta = NUM_META.get(f, {"label": f, "min": 0.0, "max": 9999.0, "step": 1.0})
                     default_val = float(st.session_state.get(f, SAMPLE.get(f, 0.0)))
-                    vals[f] = st.number_input(meta["label"] if meta["label"] else f,
-                                              value=default_val,
-                                              min_value=float(meta["min"]),
-                                              max_value=float(meta["max"]),
-                                              step=float(meta["step"]),
-                                              help=tips.get(f, ""))
+                    vals[f] = st.number_input(
+                        meta["label"] if meta["label"] else f,
+                        value=default_val,
+                        min_value=float(meta["min"]),
+                        max_value=float(meta["max"]),
+                        step=float(meta["step"]),
+                        help=tips.get(f, "")
+                    )
+                    st.caption(tips.get(f, ""))
 
         submitted = st.form_submit_button("Assess risk")
 
+    # Compute / show result (and auto-update band when sliders change)
     if submitted:
         x = pd.DataFrame([vals])[FEATURES]
-        prob = float(MODEL.predict_proba(x)[:, 1])   # pipeline + calibration inside
-        band = risk_band(prob, lo, hi)
-
-        # Save for Explanations page
+        prob = float(MODEL.predict_proba(x)[:, 1])
         st.session_state["last_inputs"] = vals
         st.session_state["last_prob"] = prob
 
-        # Build readable comparison text (no f-string format specifiers inside logic)
-        if prob < lo:
-            relation = "<"
-            cutoff_text = f"{lo:.0%}"
-        elif prob < hi:
-            relation = "between"
-            cutoff_text = f"{lo:.0%} and {hi:.0%}"
-        else:
-            relation = "≥"
-            cutoff_text = f"{hi:.0%}"
-
+    # If we have any probability (from this run or a prior run), show the band with current thresholds
+    if "last_prob" in st.session_state:
+        prob = float(st.session_state["last_prob"])
+        band = risk_band(prob, lo, hi)
+        # Friendly comparison text
+        if prob < lo: relation, cut = "<", f"{lo:.0%}"
+        elif prob < hi: relation, cut = "between", f"{lo:.0%} and {hi:.0%}"
+        else: relation, cut = "≥", f"{hi:.0%}"
         st.metric("Calibrated risk", f"{prob:.1%}")
-        st.success(f"**Risk Band: {band}** — because **{prob:.1%}** {relation} {cutoff_text}.")
-        st.caption("Probabilities are **calibrated**; explanations (next page) reflect the model before calibration.")
+        st.success(f"**Risk Band: {band}** — because **{prob:.1%}** {relation} {cut}.")
+        st.caption("Move the sidebar sliders to see the band update live. Probabilities are **calibrated**.")
 
-    # Use button return (not on_click) so we can rerun safely
     if st.button("Load sample (High risk)", type="secondary",
                  help="Pre-fills fields with a typical higher-risk profile"):
         fill_sample()
@@ -304,31 +412,46 @@ if page == "Triage (Diagnostics)":
 
     license_footer()
 
-# ---------- Page: EXPLANATIONS ----------
-elif page == "Explanations":
-    st.subheader("Why this decision?")
+# ---------- Page 3: EXPLANATIONS ----------
+elif page == "3) Explanations":
+    st.subheader("Page 3 — Why this decision?")
     st.caption("Local explanation for the most recent inputs. If none submitted yet, we use a representative sample.")
-
     row = {f: st.session_state.get(f, SAMPLE.get(f, 0)) for f in FEATURES}
     x = pd.DataFrame([row])[FEATURES]
     method, contrib = explain_single(x)
 
-    last_prob = st.session_state.get("last_prob", None)
-    if last_prob is not None:
-        st.info(f"Last predicted **calibrated risk**: **{last_prob:.1%}**")
+    if "last_prob" in st.session_state:
+        st.info(f"Last predicted **calibrated risk**: **{st.session_state['last_prob']:.1%}**")
 
     if contrib.empty:
         st.warning("Explanation currently unavailable for this configuration.")
     else:
         st.write(f"Explanation method: **{method}**")
-        st.bar_chart(contrib.set_index("feature")["contribution"])
-        st.caption("Positive bars push toward higher risk; negative bars reduce risk.")
+        chart = (
+            alt.Chart(contrib.assign(feature_order=np.arange(len(contrib))[::-1]))
+              .mark_bar()
+              .encode(
+                  x=alt.X("contribution:Q", title="Contribution to risk (signed)"),
+                  y=alt.Y("feature:N", sort="-x", title=None),
+                  tooltip=["feature", alt.Tooltip("contribution:Q", format=".4f")]
+              )
+        )
+        zero_line = alt.Chart(pd.DataFrame({"x":[0]})).mark_rule(strokeDash=[4,4]).encode(x="x:Q")
+        st.altair_chart((chart + zero_line).properties(height=420), use_container_width=True)
+
+        st.markdown("#### Top drivers for this case")
+        for _, r in contrib.head(5).iterrows():
+            direction = "↑ increases" if r["contribution"] > 0 else "↓ decreases"
+            st.markdown(f"- **{r['feature']}**: {direction} risk by ~{abs(r['contribution']):.3f} (relative units).")
+
+        st.caption("Positive bars push risk higher; negative bars reduce risk. "
+                   "If method shows *Importance-based (unsigned)*, direction may be approximated or unavailable.")
     license_footer()
 
-# ---------- Page: FAIRNESS ----------
-elif page == "Fairness (Ops)":
-    st.subheader("Slice metrics (AUC)")
-    st.caption("We report AUC by **sex**, **age buckets** (lt45, 45–60, gt60), and **cp** (chest pain type).")
+# ---------- Page 4: FAIRNESS ----------
+elif page == "4) Fairness (Ops)":
+    st.subheader("Page 4 — Slice metrics (AUC)")
+    st.caption("We report AUC by **sex**, **age buckets** (<45, 45–60, >60), and **cp** (chest pain type).")
 
     auc_by_sex = METRICS.get("auc_by_sex", {})
     auc_by_age = METRICS.get("auc_by_age_bucket", {})
@@ -336,8 +459,7 @@ elif page == "Fairness (Ops)":
 
     st.json({"auc_by_sex": auc_by_sex, "auc_by_age_bucket": auc_by_age, "auc_by_cp": auc_by_cp})
 
-    # Concrete, data-driven interpretation
-    def getv(d, k): 
+    def getv(d, k):
         try: return float(d.get(k, np.nan))
         except: return np.nan
 
@@ -348,101 +470,61 @@ elif page == "Fairness (Ops)":
     cp0     = getv(auc_by_cp, "0")
 
     st.markdown("#### What this means")
-    bullets = [
-        f"- **Sex**: Female AUC **{fem:.3f}**, Male AUC **{male:.3f}** → gap **{abs(male - fem):.3f}**.",
-        f"- **Age**: 45–60 AUC **{a_45_60:.3f}** vs >60 AUC **{a_gt60:.3f}** → older cohort shows **lower discrimination**.",
-        f"- **Chest pain type (cp=0)**: AUC **{cp0:.3f}** on this slice."
-    ]
-    st.markdown("\n".join(bullets))
+    st.markdown(
+        f"- **Sex**: Female **AUC {fem:.3f}**, Male **AUC {male:.3f}** → gap **{abs(male - fem):.3f}**.\n"
+        f"- **Age**: 45–60 **AUC {a_45_60:.3f}** vs >60 **AUC {a_gt60:.3f}** → older cohort shows **lower discrimination**.\n"
+        f"- **Chest pain 0 (Typical angina)** slice **AUC {cp0:.3f}** (others similar in JSON)."
+    )
     st.markdown("""
-**Operational use:**  
-- Track these slice AUCs over time; investigate if any gap widens beyond ~0.05–0.10.  
-- Address gaps by **collecting under-represented cohorts**, **reweighting**, or **cohort-specific thresholds** with clinical oversight.  
-- Always monitor post-deployment with auditing dashboards.
+**Operational guidance**
+- Track these slice AUCs over time; investigate gaps \>~0.05–0.10.
+- Mitigations: collect more data for under-served cohorts, reweight during training,
+  or use **cohort-specific thresholds** with clinical oversight.
+- Post-deployment: audit periodically for drift and equity.
     """)
     license_footer()
 
-# ---------- Page: MODEL QUALITY ----------
-elif page == "Model Quality":
-    st.subheader("Validation metrics (exact)")
+# ---------- Page 5: MODEL QUALITY ----------
+elif page == "5) Model Quality":
+    st.subheader("Page 5 — Validation metrics")
     clean = {k: (round(v, 4) if isinstance(v, float) else v) for k, v in METRICS.items()}
     st.write(clean)
     if "auc_ci" in METRICS:
         st.write(f"Test AUC 95% CI: [{METRICS['auc_ci'][0]:.3f}, {METRICS['auc_ci'][1]:.3f}]")
 
-    # Compact grid + exact interpretations
     c1, c2 = st.columns(2)
     with c1:
         st.image(str(ART / "roc.png"), use_column_width=True, caption="ROC curve (AUC)")
         st.markdown(
-            f"- **AUC = {METRICS.get('auc', 0):.3f}** → the model correctly ranks random positive above random negative ~**{METRICS.get('auc', 0):.0%}** of the time.\n"
-            f"- **95% CI = [{METRICS.get('auc_ci', [0,0])[0]:.3f}, {METRICS.get('auc_ci', [0,0])[1]:.3f}]** → expected variability across test resamples.\n"
-            "Interpretation: strong global separability; use thresholds to trade off TPR/FPR as needed."
+            f"- **AUC = {METRICS.get('auc', 0):.3f}** → ranks a random positive above a random negative about **{METRICS.get('auc', 0):.0%}** of the time.\n"
+            f"- **95% CI = [{METRICS.get('auc_ci', [0,0])[0]:.3f}, {METRICS.get('auc_ci', [0,0])[1]:.3f}]** indicates stability across resamples."
         )
     with c2:
         st.image(str(ART / "pr.png"), use_column_width=True, caption="Precision–Recall (AUPRC)")
         st.markdown(
-            f"- **AUPRC = {METRICS.get('aupr', 0):.3f}** → average precision across recalls; better than a naive baseline at class prevalence.\n"
-            "Interpretation: maintains high precision through useful recall; good for imbalanced screening."
+            f"- **AUPRC = {METRICS.get('aupr', 0):.3f}** → average precision across recall levels; useful when positives are less common."
         )
 
     c3, c4 = st.columns(2)
     with c3:
         st.image(str(ART / "reliability.png"), use_column_width=True, caption="Reliability (Calibration)")
         st.markdown(
-            f"- **Brier score = {METRICS.get('brier', 0):.3f}** (lower is better). After isotonic calibration, probabilities align with observed frequencies.\n"
-            "Interpretation: dots near the diagonal = trustworthy probabilities for thresholding and triage."
+            f"- **Brier score = {METRICS.get('brier', 0):.3f}** (lower is better). Post-isotonic dots near the diagonal → **trust probabilities**."
         )
     shap_img = ART / "shap_summary.png"
     with c4:
         if shap_img.exists():
             st.image(str(shap_img), use_column_width=True, caption="Global SHAP summary (top features)")
-            st.markdown(
-                "Interpretation: features with larger magnitude bars influence risk more across the dataset; color scatter reflects interactions."
-            )
+            st.markdown("Bigger magnitude → stronger global influence; scatter color shows interactions.")
         else:
-            st.info("Global SHAP summary not bundled; local explanations still available on the **Explanations** page.")
+            st.info("Global SHAP summary not bundled; local explanations are on **3) Explanations**.")
 
     st.caption("We use **isotonic calibration** on a held-out fold to align predicted probabilities with observed frequencies.")
     license_footer()
 
-# ---------- Page: BATCH SCORING ----------
-elif page == "Batch Scoring":
-    st.subheader("Score a CSV file")
-    st.caption("Upload a CSV with the following columns (header required): " + ", ".join(FEATURES))
-    up = st.file_uploader("Upload CSV", type=["csv"])
-    if up is not None:
-        try:
-            dfu = pd.read_csv(up)
-            missing = [c for c in FEATURES if c not in dfu.columns]
-            if missing:
-                st.error(f"Missing columns: {missing}")
-            else:
-                proba = MODEL.predict_proba(dfu[FEATURES])[:, 1]
-                out = dfu.copy()
-                out["risk_probability"] = proba
-                lo_th = float(st.session_state.get("lo", 0.07))
-                hi_th = float(st.session_state.get("hi", 0.35))
-                out["risk_band"] = pd.cut(
-                    out["risk_probability"],
-                    bins=[-1, lo_th, hi_th, 1.1],
-                    labels=["Low", "Medium", "High"]
-                )
-                st.dataframe(out.head(25), use_container_width=True)
-                st.download_button(
-                    "Download scored CSV",
-                    out.to_csv(index=False).encode("utf-8"),
-                    file_name="scored_heartrisk.csv",
-                    mime="text/csv"
-                )
-                st.caption("Note: risk bands use the **current sidebar thresholds**.")
-        except Exception as e:
-            st.error(f"Could not score file: {e}")
-    license_footer()
-
-# ---------- Page: DATA EXPLORER ----------
-elif page == "Data Explorer":
-    st.subheader("Sample dataset (read-only)")
+# ---------- Page 6: DATA EXPLORER ----------
+elif page == "6) Data Explorer":
+    st.subheader("Page 6 — Sample dataset (read-only)")
     if DF_BG is None:
         st.warning("Dataset file not found at data/heart.csv.")
     else:
@@ -460,13 +542,47 @@ elif page == "Data Explorer":
         idx = st.number_input("Row index", min_value=0, max_value=max(0, len(DF_BG)-1), value=4, step=1)
         if st.button("Send selected row to TRIAGE"):
             push_row_to_triage(DF_BG.iloc[int(idx)][FEATURES].to_dict())
-            st.rerun()  # triggers apply_pending_nav() at top
+            st.rerun()
 
     license_footer()
 
-# ---------- Page: PRIVACY ----------
-elif page == "Privacy & Trust":
-    st.subheader("Privacy-first & Trust")
+# ---------- Page 7: BATCH SCORING ----------
+elif page == "7) Batch Scoring":
+    st.subheader("Page 7 — Score a CSV file")
+    st.caption("Upload a CSV with the following columns (header required): " + ", ".join(FEATURES))
+    up = st.file_uploader("Upload CSV", type=["csv"])
+    if up is not None:
+        try:
+            dfu = pd.read_csv(up)
+            missing = [c for c in FEATURES if c not in dfu.columns]
+            if missing:
+                st.error(f"Missing columns: {missing}")
+            else:
+                proba = MODEL.predict_proba(dfu[FEATURES])[:, 1]
+                out = dfu.copy()
+                out["risk_probability"] = proba
+                lo_th = float(st.session_state.get("lo", DEFAULT_LO))
+                hi_th = float(st.session_state.get("hi", DEFAULT_HI))
+                out["risk_band"] = pd.cut(
+                    out["risk_probability"],
+                    bins=[-1, lo_th, hi_th, 1.1],
+                    labels=["Low", "Medium", "High"]
+                )
+                st.dataframe(out.head(25), use_container_width=True)
+                st.download_button(
+                    "Download scored CSV",
+                    out.to_csv(index=False).encode("utf-8"),
+                    file_name="scored_heartrisk.csv",
+                    mime="text/csv"
+                )
+                st.caption("Note: `risk_band` uses the **current sidebar thresholds**.")
+        except Exception as e:
+            st.error(f"Could not score file: {e}")
+    license_footer()
+
+# ---------- Page 8: PRIVACY ----------
+elif page == "8) Privacy & Trust":
+    st.subheader("Page 8 — Privacy-first & Trust")
     st.markdown("""
 - No PHI used. Model trained on a public, de-identified dataset (UCI Heart).
 - All predictions computed locally on this app/server.
@@ -476,24 +592,24 @@ elif page == "Privacy & Trust":
     """)
     license_footer()
 
-# ---------- Page: IMPACT ----------
+# ---------- Page 9: IMPACT ----------
 else:
-    st.subheader("Impact & Recommendations")
+    st.subheader("Page 9 — Impact & Recommendations")
     st.markdown("""
 ### Summary & Conclusions
-- Model quality: **AUC = {auc:.3f}**, **AUPRC = {aupr:.3f}**, **Brier = {brier:.3f}**, **AUC 95% CI = [{lo_ci:.3f}, {hi_ci:.3f}]**.
-- Calibration is **good** after isotonic fitting → probabilities are appropriate for thresholded triage.
-- Equity watchpoint: **older patients (>60)** show lower discrimination (**AUC {age_gt60:.3f}**) than **45–60** (**AUC {age_45_60:.3f}**).
+- Model quality: **AUC = {auc:.3f}**, **AUPRC = {aupr:.3f}**, **Brier = {brier:.3f}**, **AUC 95% CI = [{lo_ci:.3f}, {hi_ci:.3f}]**.  
+- Calibration is **good** after isotonic fitting → probabilities are appropriate for thresholded triage.  
+- Equity watchpoint: **older patients (>60)** show somewhat lower discrimination (**AUC {age_gt60:.3f}**) vs **45–60** (**AUC {age_45_60:.3f}**).
 
 ### Operational Value (order-of-magnitude)
-- Clinic volume: **2,000 patients/month**, 15% suspected cardiac cases, ~$600 avg downstream test cost.
-- A calibrated triage that cuts unnecessary follow-ups by **5–8%** (holding sensitivity) saves **$9k–$14k/month** and frees clinician time.
+Assume 2,000 visits/month; 15% suspected cardiac; \$600 avg downstream test.  
+A calibrated triage cutting unnecessary follow-ups by **5–8%** (holding sensitivity) saves **\$9k–\$14k/month** and frees clinician time.
 
 ### Recommendations
-1. **Adopt calibrated thresholds** tuned to site prevalence (defaults 7% / 35% are a starting point).  
-2. **Monitor fairness** — track slice AUCs by sex, age, chest pain type; add cohort-specific thresholds if gaps persist.  
-3. **Governance** — IRB review, decision logs, post-deployment drift checks, and periodic re-training on local EHR cohorts.  
-4. **Next data step** — retrain with site data (e.g., MIMIC-IV / internal registry), expand features (labs, meds), and prospective A/B testing.
+1. **Adopt calibrated thresholds** tuned to site prevalence (defaults **7% / 35%** are a starting point).  
+2. **Monitor fairness** — track slice AUCs by sex, age, chest pain type; consider **cohort-specific thresholds** if gaps persist.  
+3. **Governance** — IRB review, decision logs, drift checks, periodic re-training on local EHR cohorts.  
+4. **Next data step** — retrain with site data (e.g., internal registry), expand features (labs, meds), and prospective A/B testing.
 
 ### Who benefits
 - Health systems (e.g., **Kaiser Permanente, HCA, Cleveland Clinic, Mayo Clinic**).  
