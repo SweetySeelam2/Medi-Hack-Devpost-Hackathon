@@ -25,8 +25,8 @@ In real clinics, triage is noisy and resources are tight. Even a small lift in *
 
 ---
 
-## 🧭 How I chose the thresholds (7% / 35%)
-*Short answer:* these are **demo defaults**, not clinical truth. I encode a common operations policy: keep **High** a smaller subset to **fast-track**, and make **Low** truly low risk.
+## 🧭 How thresholds were chosen (7% / 35%)
+These are **demo defaults**, not clinical truth. Encoded a common operations policy: keep **High** a smaller subset to **fast-track**, and make **Low** truly low risk.
 
 **Principled selection you can justify**
 1) **Decide operational targets first**
@@ -40,13 +40,11 @@ In real clinics, triage is noisy and resources are tight. Even a small lift in *
 
    On this dataset, these rules commonly land around **0.05–0.10** for Low and **0.30–0.40** for High → my demo defaults **0.07 / 0.35**.
 
-3) **(Two-way option)** If you wanted a single “escalate vs not” threshold:  
-   \[
-   t^* = \frac{C_{FP}}{C_{FP} + C_{FN}}
-   \]
-   If a miss is ~10× worse than an unnecessary test, \( t^* \approx \frac{1}{11} \approx 0.09 \).
+3) **(Two-way option).** If you want a single “escalate vs not” cutoff, use the cost-ratio formula:
+`t* = C_FP / (C_FP + C_FN)`.  
+Example: if a miss (FN) is about **10×** a false alarm (FP), then `t* ≈ 1/11 ≈ 0.09`.
 
-*In production you would replace the demos with site-specific thresholds derived from your own validation set and clinical policy.*
+*In production, replace the demos with site-specific thresholds derived from your validation set and clinical policy.*
 
 ---
 

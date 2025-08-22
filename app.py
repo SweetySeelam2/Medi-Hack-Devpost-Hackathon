@@ -381,8 +381,9 @@ keep **High** a smaller subset to fast-track, and make **Low** truly low risk.
    - **High:** choose the smallest *t* so only your top *C%* of cases have *p ≥ t*, or pick *t* so PPV among *p ≥ t* meets your target.  
    - **Low:** increase *t* from 0 until expected events among *p < t* stay within your allowed misses per 100.  
    On calibrated models this often lands **Low** around **0.05–0.10** and **High** around **0.30–0.40** — hence **0.07 / 0.35** as starters.  
-3) **Optional single-cutoff (2-way):** *t* = *C*<sub>FP</sub> / (*C*<sub>FP</sub> + *C*<sub>FN</sub>).  
-   If a miss is ~10× worse than an unnecessary test, *t* ≈ **0.09**.
+3) **(Two-way option).** If you want a single “escalate vs not” cutoff, use the cost-ratio formula:
+`t* = C_FP / (C_FP + C_FN)`.  
+Example: if a miss (FN) is about **10×** a false alarm (FP), then `t* ≈ 1/11 ≈ 0.09`.
 
 Default value ranges are **7% / 35%** in this demo. Replace them with site-specific thresholds derived from **your** validation data, capacity, and risk tolerance.
 """)
