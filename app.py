@@ -372,18 +372,19 @@ Features: `age, sex, cp, trestbps, chol, fbs, restecg, thalach, exang, oldpeak, 
 Source: Kaggle (*Heart Disease Dataset*) — link on **Page 8**.
 
 ### How thresholds were chosen (7% / 35%)
-Short answer: these are **demo defaults**, not clinical truth. They encode a common ops policy:  
+These are **demo defaults**, not clinical truth. They encode a common ops policy:  
 keep **High** a smaller subset to fast-track, and make **Low** truly low risk.
 
-**Principled selection you can justify**
+**Principled selection can be justified**
 1) **Decide ops targets:** capacity for fast-track (e.g., 15–25% of cases), acceptable miss rate in **Low** (e.g., ≤3–5 per 100).  
 2) **Use calibration to set two cutoffs:**  
-   - **High**: choose the smallest *t* so only your top *C%* of cases have *p ≥ t*, or so PPV among *p ≥ t* meets your target.  
-   - **Low**: increase *t* from 0 until expected events among *p < t* stay within your allowed misses per 100.  
-   These often land around **0.05–0.10** for Low and **0.30–0.40** for High → hence **0.07 / 0.35** as starters.  
-3) Optional single-cutoff (2-way): *t\*** = C_FP / (C_FP + C_FN). If a miss is ~10× worse than an unnecessary test, *t\** ≈ 0.09.
+   - **High:** choose the smallest *t* so only your top *C%* of cases have *p ≥ t*, or pick *t* so PPV among *p ≥ t* meets your target.  
+   - **Low:** increase *t* from 0 until expected events among *p < t* stay within your allowed misses per 100.  
+   On calibrated models this often lands **Low** around **0.05–0.10** and **High** around **0.30–0.40** — hence **0.07 / 0.35** as starters.  
+3) **Optional single-cutoff (2-way):** *t* = *C*<sub>FP</sub> / (*C*<sub>FP</sub> + *C*<sub>FN</sub>).  
+   If a miss is ~10× worse than an unnecessary test, *t* ≈ **0.09**.
 
-Replace the demos with site-specific thresholds derived from your own validation.
+Default value ranges are **7% / 35%** in this demo. Replace them with site-specific thresholds derived from **your** validation data, capacity, and risk tolerance.
 """)
     st.markdown("""
 ### Glossary
