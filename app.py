@@ -461,7 +461,8 @@ elif page == "2) Triage (Diagnostics)":
                         f, options=list(CATS[f].keys()),
                         index=list(CATS[f].keys()).index(default_code),
                         format_func=lambda k, _f=f: CATS[_f][k],
-                        help=tips.get(f, "")
+                        help=tips.get(f, ""),
+                        key=f,  # bind widget state to feature name
                     )
                     st.caption(tips.get(f, ""))
                     st.caption(option_caption(f))
@@ -474,7 +475,8 @@ elif page == "2) Triage (Diagnostics)":
                         min_value=float(meta["min"]),
                         max_value=float(meta["max"]),
                         step=float(meta["step"]),
-                        help=tips.get(f, "")
+                        help=tips.get(f, ""),
+                        key=f,  # bind widget state to feature name
                     )
                     st.caption(tips.get(f, ""))
 
@@ -528,8 +530,48 @@ elif page == "3) Explanations":
     x = pd.DataFrame([row])[FEATURES]
     method, contrib = explain_single(x)
 
+    # ---- NEW: dynamic, plain-language narrative tied to Page 2 inputs ----
+    def _parse_name(feat_name):
+        """
+        From transformed name like 'cat__thal_3' or 'num__oldpeak' return:
+        base='thal', code=3 (int or None), is_cat=True/False
+        """
+        name = feat_name
+        if "__" in name:
+            _, name = name.split("__", 1)
+        # try to split final _<int> as category indicator
+        base, code = name, None
+        if "_" in name:
+            maybe_base, maybe_code = name.rsplit("_", 1)
+            if maybe_code.lstrip("-").isdigit():
+                base, code = maybe_base, int(maybe_code)
+        return base, code, base in CATS
+
+    def _pretty_base(base):
+        if base in NUM_META and NUM_META[base].get("label"):
+            return NUM_META[base]["label"]
+        # fallback readable
+        return base
+
+    def _value_text(base, code, row_val):
+        """Human-friendly value string for this patient."""
+        if base in CATS:
+            # categorical; show the patient's actual value (not the one-hot column)
+            label = CATS[base].get(int(row_val), str(row_val))
+            return f"{label}"
+        else:
+            meta = NUM_META.get(base, {"label": base})
+            return f"{row_val}"
+
     if "last_prob" in st.session_state:
-        st.info(f"Last predicted **calibrated risk**: **{st.session_state['last_prob']:.1%}**")
+        p = float(st.session_state["last_prob"])
+    else:
+        p = float(MODEL.predict_proba(x)[:, 1])
+    lo, hi = DEFAULT_LO, DEFAULT_HI
+    band = risk_band(p, lo, hi)
+
+    if "last_prob" in st.session_state:
+        st.info(f"Last predicted **calibrated risk**: **{p:.1%}** → **{band}** band with cutoffs Low < {lo:.0%}, High ≥ {hi:.0%}.")
 
     if contrib.empty:
         st.warning("Explanation currently unavailable for this configuration.")
@@ -549,13 +591,71 @@ elif page == "3) Explanations":
         zero_line = alt.Chart(pd.DataFrame({"y":[0]})).mark_rule(strokeDash=[4,4]).encode(y="y:Q")
         st.altair_chart((zero_line + chart).properties(height=420), use_container_width=True)
 
-        st.markdown("#### Top drivers for this case")
-        for _, r in contrib.head(5).iterrows():
-            direction = "↑ increases" if r["contribution"] > 0 else "↓ decreases"
-            st.markdown(f"- **{r['feature']}**: {direction} risk by ~{abs(r['contribution']):.3f} (model-space units).")
+        # ---- NEW: turn bars into sentences ----
+        unit_text = "percentage points" if "Directional" in method else "model-space units"
+        c2 = contrib.copy()
+        c2["pp"] = c2["contribution"] * (100.0 if "Directional" in method else 1.0)
+        c2[["base", "code", "is_cat"]] = c2["feature"].apply(
+            lambda n: pd.Series(_parse_name(n))
+        )
+        # Keep features that actually matter
+        thr = 0.5 if "Directional" in method else 0.01
+        top_pos = c2[c2["contribution"] > 0].sort_values("contribution", ascending=False).head(6)
+        top_pos = top_pos[abs(top_pos["pp"]) >= thr]
+        top_neg = c2[c2["contribution"] < 0].sort_values("contribution", ascending=True).head(6)
+        top_neg = top_neg[abs(top_neg["pp"]) >= thr]
+
+        def _bullet(row_s):
+            base = row_s["base"]
+            code = row_s["code"]
+            val = row.get(base, None)
+            base_nice = _pretty_base(base)
+            value_str = _value_text(base, code, val) if val is not None else "(n/a)"
+            sign = "↑ increases" if row_s["contribution"] > 0 else "↓ decreases"
+            amt = abs(row_s["pp"])
+            if "Directional" in method:
+                amt_txt = f"{amt:.1f} {unit_text}"
+                # For directional, also translate to per-100 people wording
+                per100 = f" (~{amt:.1f} more per 100 similar patients)"
+                amt_txt = amt_txt + per100
+            else:
+                amt_txt = f"{amt:.3f} {unit_text}"
+            return f"**{base_nice}** = {value_str}: **{sign} risk** by ~{amt_txt}."
+
+        st.markdown("#### Plain-language explanation for this patient")
+        st.markdown(f"- **Overall:** The model estimates **{p:.1%}** risk, which falls in the **{band}** band "
+                    f"(policy: Low < {lo:.0%}, Medium {lo:.0%}–{hi:.0%}, High ≥ {hi:.0%}).")
+
+        # Distance to next band
+        if band == "Low":
+            to_med = max(0.0, (lo - p) * 100.0)
+            st.caption(f"To reach **Medium**, probability would need to increase by about **{(lo-p)*100:.1f} pp**.")
+        elif band == "Medium":
+            up = (hi - p) * 100.0
+            down = (p - lo) * 100.0
+            if up > 0:
+                st.caption(f"To reach **High**, probability would need to increase by about **{up:.1f} pp**. "
+                           f"To fall to **Low**, it would need to decrease by **{down:.1f} pp**.")
+        else:  # High
+            st.caption(f"This exceeds the High cutoff (≥ {hi:.0%}).")
+
+        if len(top_pos) > 0:
+            st.markdown("##### Biggest factors **raising** this risk")
+            for _, r in top_pos.iterrows():
+                st.markdown(f"- {_bullet(r)}")
+        else:
+            st.markdown("##### Biggest factors **raising** this risk\n- (None substantial for this case.)")
+
+        if len(top_neg) > 0:
+            st.markdown("##### Factors **lowering** this risk")
+            for _, r in top_neg.iterrows():
+                st.markdown(f"- {_bullet(r)}")
+        else:
+            st.markdown("##### Factors **lowering** this risk\n- (None substantial for this case.)")
 
         st.caption(
             "Bars above zero pushed the probability upward; bars below zero pulled it down. "
+            "Effects shown as *percentage points* when using the directional method; otherwise as model-space units. "
             "Use this to justify next steps (e.g., large **oldpeak** or **downsloping slope** supporting rapid work-up)."
         )
     license_footer()
