@@ -47,6 +47,14 @@ PREPROC  = BUNDLE.get("preprocessor", None)  # optional; used only as a fallback
 METRICS = load_metrics()
 DF_BG   = load_bg(FEATURES)
 
+# Use a de-duplicated view everywhere we show/select rows (model was trained on de-duped data ~302 rows)
+if DF_BG is not None:
+    DF_VIEW = DF_BG.drop_duplicates().reset_index(drop=True)
+    RAW_N = len(DF_BG)
+    DEDUP_N = len(DF_VIEW)
+else:
+    DF_VIEW, RAW_N, DEDUP_N = None, 0, 0
+
 # ---------- Dictionaries & samples ----------
 CATS = {
     "sex":    {0: "Female (0)", 1: "Male (1)"},
@@ -59,14 +67,15 @@ CATS = {
     "thal":   {0: "Unknown (0)", 1: "Fixed defect (1)", 2: "Normal (2)", 3: "Reversible defect (3)"},
 }
 NUM_META = {
-    "age":      {"label": "Age (years)",               "min": 18, "max": 95,  "step": 1.0},
+    "age":      {"label": "Age (years)",                    "min": 18, "max": 95,  "step": 1.0},
     "trestbps": {"label": "Resting blood pressure (mm Hg)", "min": 80, "max": 220, "step": 1.0},
-    "chol":     {"label": "Serum cholesterol (mg/dL)", "min": 100,"max": 600, "step": 1.0},
-    "thalach":  {"label": "Maximum heart rate (bpm)",  "min": 60, "max": 230, "step": 1.0},
-    "oldpeak":  {"label": "ST depression (mm)",        "min": 0.0,"max": 7.0, "step": 0.1},
+    "chol":     {"label": "Serum cholesterol (mg/dL)",      "min": 100,"max": 600, "step": 1.0},
+    "thalach":  {"label": "Maximum heart rate (bpm)",       "min": 60, "max": 230, "step": 1.0},
+    "oldpeak":  {"label": "ST depression (mm)",             "min": 0.0,"max": 7.0, "step": 0.1},
 }
-# A stronger high-risk sample so it usually lands ≥35% on common trained pipelines
-SAMPLE = {
+
+# A base "strong risk" seed (we will auto-boost it to guarantee High if needed)
+SAMPLE_SEED = {
     "age": 74, "sex": 1, "cp": 3, "trestbps": 170, "chol": 310, "fbs": 1, "restecg": 1,
     "thalach": 92, "exang": 1, "oldpeak": 5.0, "slope": 2, "ca": 3, "thal": 3
 }
@@ -162,7 +171,7 @@ def explain_single(x_df):
 
     try:
         import shap
-        bg = DF_BG.sample(min(len(DF_BG), 200), random_state=42) if DF_BG is not None else x_df[FEATURES].copy()
+        bg = DF_VIEW.sample(min(len(DF_VIEW), 200), random_state=42) if DF_VIEW is not None else x_df[FEATURES].copy()
         Xbg = pre.transform(bg)
         if hasattr(Xbg, "toarray"): Xbg = Xbg.toarray()
         Xtd = Xt.toarray() if hasattr(Xt, "toarray") else np.asarray(Xt)
@@ -205,10 +214,61 @@ def explain_single(x_df):
                        .head(15))
             return method, contrib
 
-def fill_sample():
-    """Pre-fill the TRIAGE form with a strong high-risk profile."""
-    for k, v in SAMPLE.items():
-        st.session_state[k] = v
+# --- High-risk sample utilities ---
+def _predict_row(d):
+    x = pd.DataFrame([d])[FEATURES]
+    return float(MODEL.predict_proba(x)[:, 1])
+
+def _clip_num(name, val):
+    meta = NUM_META[name]
+    return float(np.clip(val, meta["min"], meta["max"]))
+
+def find_or_make_high_risk(hi_thresh=0.35):
+    """
+    Try: (1) seed sample, (2) boosted extremes grid, (3) highest-risk row in DF_VIEW.
+    Return (row_dict, prob).
+    """
+    # 1) seed
+    r = SAMPLE_SEED.copy()
+    p = _predict_row(r)
+    if p >= hi_thresh:
+        return r, p
+
+    # 2) small grid search over realistic extremes
+    ages     = [70, 80, 90]
+    chols    = [310, 400, 520]
+    bps      = [170, 190, 210]
+    thalachs = [60, 75, 90]
+    oldpeaks = [4.0, 5.0, 6.5]
+    best = (p, r.copy())
+    for a in ages:
+        for c in chols:
+            for b in bps:
+                for hr in thalachs:
+                    for op in oldpeaks:
+                        cand = {
+                            "age": _clip_num("age", a), "sex": 1, "cp": 3, "trestbps": _clip_num("trestbps", b),
+                            "chol": _clip_num("chol", c), "fbs": 1, "restecg": 2, "thalach": _clip_num("thalach", hr),
+                            "exang": 1, "oldpeak": _clip_num("oldpeak", op), "slope": 2, "ca": 3, "thal": 3
+                        }
+                        pr = _predict_row(cand)
+                        if pr > best[0]:
+                            best = (pr, cand.copy())
+                        if pr >= hi_thresh:
+                            return cand, pr
+    # 3) fallback: highest predicted in dataset view
+    if DF_VIEW is not None and len(DF_VIEW) > 0:
+        proba = MODEL.predict_proba(DF_VIEW[FEATURES])[:, 1]
+        idx = int(np.argmax(proba))
+        cand = DF_VIEW.iloc[idx][FEATURES].to_dict()
+        pr = float(proba[idx])
+        return cand, pr
+    return r, p
+
+def fill_sample(row_dict):
+    """Fill the TRIAGE form with a given profile."""
+    for k, v in row_dict.items():
+        st.session_state[k] = int(v) if k in CATS else float(v)
 
 def queue_nav(page_name: str):
     st.session_state["pending_nav"] = page_name
@@ -224,7 +284,7 @@ def push_row_to_triage(row_dict):
     queue_nav("2) Triage (Diagnostics)")
 
 # ---------- Sidebar (fixed policy + clear legends) ----------
-st.sidebar.header("Risk Policy (fixed for demo)")
+st.sidebar.header("Risk Policy (fixed threshold ranges for demo)")
 # Fixed operational thresholds for action bands (NOT changing the model)
 DEFAULT_LO = 0.07   # Low if p < 7% (safe-to-monitor band when resources are tight)
 DEFAULT_HI = 0.35   # High if p ≥ 35% (smaller subset for rapid work-up)
@@ -240,8 +300,8 @@ st.sidebar.markdown(
 - **Medium:** **{DEFAULT_LO:.0%}–{DEFAULT_HI:.0%}**  
 - **High:** p ≥ **{DEFAULT_HI:.0%}**  
 
-These **do not change the model** — they only map the calibrated probability to an operational action band used on **2) Triage** and **7) Batch Scoring**.  
-**Why these values?** Demo defaults reflect a common triage heuristic: keep **High** small for rapid escalation, and **Low** conservative (<7%). In a deployment, set bands with clinicians using local prevalence & risk tolerance.
+These **do not change the model** — they only map the calibrated probability to an operational action band used on **page 2 Triage** and **page 7 Batch Scoring**.  
+**Why these values?** Demo defaults reflect a practical triage stance: keep **High** a smaller group to fast-track, and make **Low** conservative (<7%). In deployment, set bands from your own calibration, capacity, and miss-tolerance.
 """
 )
 
@@ -261,7 +321,7 @@ with st.sidebar.expander("Triage measurements — code legend (for Page 2)", exp
 with st.sidebar.expander("What each measurement means & why included", expanded=False):
     st.markdown("""
 - **age** — older age raises atherosclerotic risk.  
-- **sex** — male sex has higher CAD prevalence in classic cohorts.  
+- **sex** — male sex shows higher CAD prevalence in classic cohorts.  
 - **cp (chest pain type)** — typical/atypical angina signal strength; asymptomatic can still be risky.  
 - **trestbps (rest BP)** — hypertension damages vessels → CAD risk.  
 - **chol (serum cholesterol)** — higher LDL/total cholesterol → plaque formation.  
@@ -270,7 +330,7 @@ with st.sidebar.expander("What each measurement means & why included", expanded=
 - **thalach (max HR)** — lower achieved HR can indicate limited reserve.  
 - **exang (exercise-induced angina)** — provoked chest pain indicates supply–demand mismatch.  
 - **oldpeak (ST depression)** — classic ischemia marker under stress.  
-- **slope (ST slope)** — downsloping more concerning than flat/upsloping.  
+- **slope (ST slope)** — downsloping is more concerning.  
 - **ca (vessels)** — greater number visualized ≈ more disease burden.  
 - **thal** — perfusion category; reversible/fixed defects align with ischemia on imaging.
 """)
@@ -294,7 +354,7 @@ page = st.sidebar.radio("Go to", NAV_OPTIONS, key="nav")
 if page == "1) Project Overview":
     st.subheader("Page 1 — Project Overview")
 
-    st.markdown("""
+    st.markdown(f"""
 ### What this is
 **HeartRisk Assist** estimates **calibrated probability** of cardiac disease from routine measurements (Kaggle **Heart Disease UCI** CSV).  
 It’s for **triage**, not diagnosis — helping decide who needs **faster work-up**.
@@ -307,15 +367,30 @@ We need **well-calibrated probabilities** (so *30% ≈ 30%*), **clear explanatio
 Calibrate probabilities; explain each prediction; monitor fairness; keep PHI out; use tunable (but fixed here) thresholds.
 
 ### Dataset
-Loaded training file rows: **{n}** (this build).  
+Loaded file rows: **{RAW_N}**. After removing duplicates used for modeling/analysis: **{DEDUP_N}**.  
 Features: `age, sex, cp, trestbps, chol, fbs, restecg, thalach, exang, oldpeak, slope, ca, thal`.  
 Source: Kaggle (*Heart Disease Dataset*) — link on **Page 8**.
 
+### How thresholds were chosen (7% / 35%)
+Short answer: these are **demo defaults**, not clinical truth. They encode a common ops policy:  
+keep **High** a smaller subset to fast-track, and make **Low** truly low risk.
+
+**Principled selection you can justify**
+1) **Decide ops targets:** capacity for fast-track (e.g., 15–25% of cases), acceptable miss rate in **Low** (e.g., ≤3–5 per 100).  
+2) **Use calibration to set two cutoffs:**  
+   - **High**: choose the smallest *t* so only your top *C%* of cases have *p ≥ t*, or so PPV among *p ≥ t* meets your target.  
+   - **Low**: increase *t* from 0 until expected events among *p < t* stay within your allowed misses per 100.  
+   These often land around **0.05–0.10** for Low and **0.30–0.40** for High → hence **0.07 / 0.35** as starters.  
+3) Optional single-cutoff (2-way): *t\*** = C_FP / (C_FP + C_FN). If a miss is ~10× worse than an unnecessary test, *t\** ≈ 0.09.
+
+Replace the demos with site-specific thresholds derived from your own validation.
+""")
+    st.markdown("""
 ### Glossary
 - **AUC** = Area Under ROC Curve; **AUPRC** = Area Under Precision–Recall Curve  
 - **TPR** = True Positive Rate (sensitivity); **FPR** = False Positive Rate (fall-out)  
 - **PHI** = Protected Health Information
-""".format(n="unknown" if DF_BG is None else len(DF_BG)))
+""")
     license_footer()
 
 # ---------- Page 2: TRIAGE ----------
@@ -324,9 +399,9 @@ elif page == "2) Triage (Diagnostics)":
 
     with st.expander("How to use", expanded=False):
         st.markdown(f"""
-1) Enter the measurements (or click **Load sample**).  
+1) Enter the measurements (or click **Load high-risk sample**).  
 2) Press **Assess risk** — you’ll get a **calibrated probability** and an **action band** based on the fixed policy (**Low < {DEFAULT_LO:.0%}**, **Medium {DEFAULT_LO:.0%}–{DEFAULT_HI:.0%}**, **High ≥ {DEFAULT_HI:.0%}**).  
-3) See **3) Explanations** for what pushed risk **up** or **down**.
+3) See **page 3 Explanations** for what pushed risk **up** or **down**.
         """)
 
     tips = {
@@ -354,7 +429,7 @@ elif page == "2) Triage (Diagnostics)":
         for i, f in enumerate(FEATURES):
             with cols[i % 3]:
                 if f in CATS:
-                    default_code = int(st.session_state.get(f, SAMPLE.get(f, list(CATS[f].keys())[0])))
+                    default_code = int(st.session_state.get(f, SAMPLE_SEED.get(f, list(CATS[f].keys())[0])))
                     vals[f] = st.selectbox(
                         f, options=list(CATS[f].keys()),
                         index=list(CATS[f].keys()).index(default_code),
@@ -365,7 +440,7 @@ elif page == "2) Triage (Diagnostics)":
                     st.caption(option_caption(f))
                 else:
                     meta = NUM_META.get(f, {"label": f, "min": 0.0, "max": 9999.0, "step": 1.0})
-                    default_val = float(st.session_state.get(f, SAMPLE.get(f, 0.0)))
+                    default_val = float(st.session_state.get(f, SAMPLE_SEED.get(f, 0.0)))
                     vals[f] = st.number_input(
                         meta["label"] if meta["label"] else f,
                         value=default_val,
@@ -389,7 +464,6 @@ elif page == "2) Triage (Diagnostics)":
         prob = float(st.session_state["last_prob"])
         band = risk_band(prob, lo, hi)
 
-        # Friendly explanation: per-100 patients & operational guidance
         per100 = int(round(prob * 100))
         if prob < lo:
             relation, cut = "<", f"{lo:.0%}"
@@ -406,12 +480,15 @@ elif page == "2) Triage (Diagnostics)":
         st.markdown(
             f"- **Interpretation:** Among 100 similar patients, about **{per100}** would be expected to have cardiac disease.\n"
             f"- **Band meaning:** {meaning}\n"
-            f"- **Next:** open **3) Explanations** to see which features pushed the risk up or down for this case."
+            f"- **Next:** open **page 3 Explanations** to see which features pushed the risk up or down for this case."
         )
 
-    if st.button("Load sample (High risk)", type="secondary",
-                 help="Pre-fills fields with a strong higher-risk profile"):
-        fill_sample()
+    if st.button("Load high-risk sample", type="secondary",
+                 help="Auto-loads a profile that scores in **High** (≥ 35%) when possible for this trained model."):
+        row, pr = find_or_make_high_risk(DEFAULT_HI)
+        fill_sample(row)
+        st.session_state["last_inputs"] = row
+        st.session_state["last_prob"] = pr
         st.rerun()
 
     license_footer()
@@ -420,7 +497,7 @@ elif page == "2) Triage (Diagnostics)":
 elif page == "3) Explanations":
     st.subheader("Page 3 — Why this decision?")
     st.caption("Local explanation for the most recent inputs. If none submitted yet, we use a representative sample.")
-    row = {f: st.session_state.get(f, SAMPLE.get(f, 0)) for f in FEATURES}
+    row = {f: st.session_state.get(f, SAMPLE_SEED.get(f, 0)) for f in FEATURES}
     x = pd.DataFrame([row])[FEATURES]
     method, contrib = explain_single(x)
 
@@ -540,28 +617,28 @@ elif page == "5) Model Quality":
 # ---------- Page 6: DATA EXPLORER ----------
 elif page == "6) Data Explorer":
     st.subheader("Page 6 — Sample dataset (read-only)")
-    if DF_BG is None:
+    if DF_VIEW is None or len(DF_VIEW) == 0:
         st.warning("Dataset file not found at data/heart.csv.")
     else:
-        n = len(DF_BG)
-        st.caption("These are the model input columns used for training & scoring (no PHI).")
-        st.dataframe(DF_BG.head(200), use_container_width=True)
+        n = len(DF_VIEW)
+        st.caption("These are the model input columns used for training & scoring (de-duplicated; no PHI).")
+        st.dataframe(DF_VIEW.head(200), use_container_width=True)
         st.download_button(
             "Download sample CSV",
-            DF_BG.to_csv(index=False).encode("utf-8"),
-            file_name="heart.csv",
+            DF_VIEW.to_csv(index=False).encode("utf-8"),
+            file_name="heart_dedup.csv",
             mime="text/csv"
         )
 
         st.markdown("### Try a dataset row in TRIAGE")
         st.caption(
-            f"Select a row index **(0–{n-1})** from the training CSV and send it to **2) Triage**. "
+            f"Select a row index **(0–{n-1})** from the de-duplicated training CSV and send it to **2) Triage**. "
             "Each row represents a single **patient encounter** with the input measurements above. "
             "Sending it to TRIAGE lets you see how a real profile scores and which features drive that decision."
         )
-        idx = st.selectbox("Row index (0–{}):".format(n-1), options=list(range(n)), index=min(4, n-1))
+        idx = st.selectbox(f"Row index (0–{n-1}):", options=list(range(n)), index=min(4, n-1))
         if st.button("Send selected row to TRIAGE"):
-            push_row_to_triage(DF_BG.iloc[int(idx)][FEATURES].to_dict())
+            push_row_to_triage(DF_VIEW.iloc[int(idx)][FEATURES].to_dict())
             st.rerun()
 
     license_footer()
