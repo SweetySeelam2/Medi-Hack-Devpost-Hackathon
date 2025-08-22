@@ -296,9 +296,9 @@ st.session_state["hi"] = float(DEFAULT_HI)
 st.sidebar.markdown(
     f"""
 **Band mapping (fixed):**  
-- **Low:** p \< **{DEFAULT_LO:.0%}**  
-- **Medium:** **{DEFAULT_LO:.0%}–{DEFAULT_HI:.0%}**  
-- **High:** p ≥ **{DEFAULT_HI:.0%}**  
+- **Low:** Probability (p) \< **{DEFAULT_LO:.0%}**  
+- **Medium:** Probability (p) between **{DEFAULT_LO:.0%}–{DEFAULT_HI:.0%}**  
+- **High:** Probability (p) ≥ **{DEFAULT_HI:.0%}**  
 
 These **do not change the model** — they only map the calibrated probability to an operational action band used on **page 2 Triage** and **page 7 Batch Scoring**.  
 **Why these values?** Demo defaults reflect a practical triage stance: keep **High** a smaller group to fast-track, and make **Low** conservative (<7%). In deployment, set bands from your own calibration, capacity, and miss-tolerance.
@@ -478,7 +478,7 @@ elif page == "2) Triage (Diagnostics)":
             meaning = "Elevated probability — prioritize faster work-up or referral."
 
         st.metric("Calibrated risk", f"{prob:.1%}")
-        st.success(f"**Risk Band: {band}** — because **{prob:.1%}** {relation} {cut}.")
+        st.success(f"**Risk Band: {band}** — because Probability (p) **{prob:.1%}** {relation} threshold {cut}.")
         st.markdown(
             f"- **Interpretation:** Among 100 similar patients, about **{per100}** would be expected to have cardiac disease.\n"
             f"- **Band meaning:** {meaning}\n"
