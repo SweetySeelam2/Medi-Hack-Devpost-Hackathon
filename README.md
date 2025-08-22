@@ -50,22 +50,21 @@ Example: if a miss (FN) is about **10×** a false alarm (FP), then `t* ≈ 1/11 
 
 ## 🗺️ Project workflow (diagram)
 
-```mermaid
 flowchart LR
-  A[Data: Kaggle Heart Disease CSV<br/>302 deduplicated rows] --> B[Preprocess<br/>Scale numeric + OneHot categoricals]
+  A[Data: Kaggle Heart Disease CSV<br/>302 deduplicated rows] --> B[Preprocess: scale numeric + one-hot categoricals]
   B --> C{Model candidates}
-  C -->|Logistic Regression (baseline)| D[Fit + CV]
-  C -->|Random Forest (final)| D
-  D --> E[Isotonic calibration<br/>(held-out fold)]
-  E --> F[Validate: ROC, PR, Brier,<br/>AUC 95% CI]
-  F --> G[Streamlit App]
-  G --> H[Triage: inputs → calibrated probability p]
+  C --> D_LR[Logistic Regression (baseline)]
+  C --> D_RF[Random Forest (final)]
+  D_LR --> E[Isotonic calibration (held-out fold)]
+  D_RF --> E
+  E --> F[Validate: ROC, PR, Brier, AUC 95% CI]
+  F --> G[Streamlit app]
+  G --> H[Triage: inputs to calibrated probability p]
   G --> I[Explanations: SHAP / fallbacks]
   G --> J[Fairness: slice AUCs]
-  G --> K[Model Quality plots]
-  G --> L[Batch scoring CSV]
-  H --> M[Action bands (demo policy):<br/>Low < 7%, Medium 7–35%, High ≥ 35%]
-```
+  G --> K[Model quality plots]
+  G --> L[Batch scoring (CSV)]
+  H --> M[Action bands (demo policy): Low < 7%, Medium 7–35%, High ≥ 35%]
 
 ---
 
