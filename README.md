@@ -132,7 +132,7 @@ These results are derived from `artifacts/roc.png`, `artifacts/pr.png`, `artifac
 
 - **Overall performance:** Discrimination is strong (AUC ≈ 0.88), precision–recall is solid (AUPRC ≈ 0.89), and post–isotonic calibration is good (Brier ≈ 0.14).
 
-- **Calibration meaning:** A calibrated probability of p% means ~p out of 100 similar patients will have the outcome—this is why thresholds/bands are actionable.
+- **Calibration meaning:** A calibrated probability of p% means ~p out of 100 similar patients will have the outcome - this is why thresholds/bands are actionable.
 
 - **Action bands (demo policy):** Low < 7%, Medium 7–35%, High ≥ 35%. In production, set these with clinicians using a principled utility/capacity trade-off (triage support, not diagnosis).
 
@@ -272,7 +272,7 @@ python -m ipykernel install --user --name=medihack --display-name "Python (medih
 
 - **Equity watchpoint:** older patients show lower discrimination (AUC {age_gt60:.3f}) relative to ages 45–60 (AUC {age_45_60:.3f}); this cohort is flagged for ongoing monitoring and potential threshold or workflow adjustments.
 
-***Bottom line: a calibrated, transparent triage tool to support prioritization and resource use—not a diagnostic device.***
+***Bottom line: A calibrated, transparent triage tool to support prioritization and resource use—not a diagnostic device.***
 
 ---
 
