@@ -10,17 +10,60 @@ I built **HeartRisk Assist** to give clinicians a **calibrated probability** of 
 
 ---
 
+## Business Challenge
+
+Clinics must prioritize suspected-cardiac patients when resources and time are limited. The goal is not to diagnose in the app; it’s to triage by producing an accurate, calibrated probability of disease so staff can fast-track high-risk, review medium-risk, and safely monitor low-risk patients.
+
+---
+
+## Blurb For Judges
+
+- Trained a Random Forest (with Logistic Regression as a baseline) and calibrated it with isotonic fitting to predict the probability of heart disease presence. 
+- On test data it achieves AUC ≈ 0.878, AUPRC ≈ 0.886, and shows good calibration. 
+- Then converted the probability into Low/Medium/High action bands (demo cutoffs 7% / 35%) to support triage, not diagnosis. 
+- Explanations (feature contributions) make decisions auditable; fairness slices flag age >60 for monitoring. 
+- In a 2,000-visit/month clinic, trimming unnecessary follow-ups by 5–8% at maintained sensitivity saves about $9k–$14k/month. 
+- This is a calibrated, transparent triage tool, not a diagnostic device.
+
+---
+
+## Target and prediction
+
+- The dataset label is target where 1 = disease present, 0 = no disease (in the source data).
+
+- The model predicts a calibrated probability
+    p = P(disease present | inputs)
+    not a hard yes/no.
+
+- The app then maps p → action bands using your demo policy:
+    Low < 7%, Medium 7–35%, High ≥ 35%.
+    This supports operational decisions (who to fast-track) while avoiding the claim of a clinical diagnosis.
+
+> If a binary decision is required, apply a single threshold (e.g., capacity- or cost-based). The UI intentionally shows **probability + band** instead of “disease: yes/no”.
+
+---
+
+## Why this solves the challenge
+
+- **Calibration → trust:** a “30%” score means ~30% observed risk, enabling **defendable thresholds**.  
+- **Action bands** (**7% / 35%** demo) align with **clinic capacity** and acceptable **miss tolerance**.  
+- **Explanations** clarify *why* a case is high/medium/low → safer adoption.  
+- **Fairness slices** surface cohorts needing attention (e.g., **>60** years shows lower discrimination).  
+- **Operational value:** small reductions in unnecessary follow-ups at fixed sensitivity translate to measur
+
+---
+
 ## What it does
-- Predicts a **calibrated probability** that heart disease is present, from 13 common inputs.
-- Explains each prediction (SHAP or fallbacks) so it’s clear **why** the risk went up or down.
-- Surfaces **equity metrics** (slice AUCs by sex, age bucket, chest-pain type).
-- Shows **ROC/PR**, **reliability**, and **AUC 95% CI** for trust and governance.
+- Predicts a **calibrated probability** that heart disease is present from **13 common inputs**.  
+- Explains each prediction (**SHAP** or fallbacks) so it’s clear **why** risk went up or down.  
+- Surfaces **equity metrics** (slice AUCs by **sex**, **age bucket**, **chest-pain type**).  
+- Shows **ROC/PR**, **reliability (calibration)**, and **AUC 95% CI** for trust and governance.  
 - Batch-scores CSVs; one-click **Load Sample (High risk)** for demo.
 
 ---
 
 ## Why it matters
-Triage lines are crowded and risk estimates vary. Calibration turns scores into **probabilities** clinicians can act on. Even modest improvements in calibrated risk stratification reduce unnecessary testing and speed up care. The **calibration + fairness** framing makes performance legible to both clinicians and operations leaders.
+Triage lines are crowded and risk estimates vary. **Calibration** turns scores into **probabilities** clinicians can act on. Even modest improvements in calibrated risk stratification reduce unnecessary testing and speed up care. The **calibration + fairness** framing makes performance legible to both clinicians and operations leaders.
 
 ---
 
@@ -42,10 +85,39 @@ Plots (ROC, PR, calibration, SHAP) are in `artifacts/`.
 
 ---
 
+## Key feature findings (what drives risk in this model)
+*Associations captured by the calibrated Random Forest with SHAP—**not** causal claims.*
+
+- **oldpeak (ST depression):** higher values **↑ risk sharply**; strongest driver.  
+- **thal (perfusion category):** **reversible (3)** or **fixed defect (1)** → **↑ risk** vs **normal (2)**.  
+- **ca (vessels via fluoroscopy):** **2–3 vessels** → **↑ risk** vs **0–1**.  
+- **slope (ST segment):** **downsloping (2)** → **↑ risk**; **upsloping (0)** → **↓ risk**; **flat (1)** between.  
+- **exang:** **1 (yes)** → **↑ risk** vs **0 (no)**.  
+- **thalach (max HR):** **lower** thalach → **↑ risk** (higher fitness protective).  
+- **age:** risk **increases** with age.  
+- **restecg:** **abnormal (1/2)** → **↑ risk** vs **normal (0)**.  
+- **trestbps / chol:** smaller, positive contributions at higher values.  
+- **sex:** **male (1)** slightly **higher risk** than **female (0)** in this dataset.  
+- **cp (chest-pain type):** **asymptomatic (3)** highest; **typical/atypical (0/1)** lower; **non-anginal (2)** between.
+
+**Takeaway:** The most influential risk-increasing drivers are higher ST depression (oldpeak), abnormal thal, more fluoroscopy-visible vessels (ca), downsloping ST slope, exercise-induced angina, older age, and rest ECG abnormalities. Higher max heart rate (thalach) is protective.
+
+- Encoding key (Heart dataset conventions):
+· cp: 0=typical, 1=atypical, 2=non-anginal, 3=asymptomatic 
+· slope: 0=up, 1=flat, 2=down 
+· thal: 1=fixed defect, 2=normal, 3=reversible defect 
+· exang: 0=no, 1=yes 
+· restecg: 0=normal, 1=ST-T abn., 2=LVH 
+· sex: 0=female, 1=male
+
+***Note: These are predictive associations from SHAP on the calibrated Random Forest; they are not causal claims and may shift with cohort or data drift.***
+
+---
+
 ## Challenges
-- **Explaining calibrated models:** I unwrapped `CalibratedClassifierCV` to explain the underlying estimator cleanly.
-- **Tiny dataset / overfit risk:** constrained RF search, held-out calibration, bootstrap CI for AUC.
-- **Windows long-path/wheels:** handled via venv hygiene and path settings.
+- **Explaining calibrated models:** Unwrapped `CalibratedClassifierCV` to explain the underlying estimator cleanly.
+- **Tiny dataset / overfit risk:** Constrained RF search, held-out calibration, bootstrap CI for AUC.
+- **Windows long-path/wheels:** Handled via venv hygiene and path settings.
 
 ---
 
@@ -66,7 +138,7 @@ Plots (ROC, PR, calibration, SHAP) are in `artifacts/`.
 - **Code:** https://github.com/SweetySeelam2/Medi-Hack-Devpost-Hackathon  
 - **Run locally:** `streamlit run app.py` (see README for steps).  
 - **Streamlit App:** https://medi-hack-devpost-hackathon.streamlit.app/  
-- **Demo video:** (Attached video demo capturing Page 1 → Triage → Explanations → Fairness → Model Quality → Impact)
+- **Demo video:** 
 
 ---
 

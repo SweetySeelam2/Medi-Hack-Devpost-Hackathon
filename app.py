@@ -362,9 +362,28 @@ It’s for **triage**, not diagnosis — helping decide who needs **faster work-
 ### Business problem
 High volumes + scarce cardiology slots → over-triage wastes resources; under-triage is unsafe.  
 We need **well-calibrated probabilities** (so *30% ≈ 30%*), **clear explanations**, and **fairness monitoring**.
+Clinics must prioritize suspected-cardiac patients when resources and time are limited. 
 
 ### Goals
-Calibrate probabilities; explain each prediction; monitor fairness; keep PHI out; use tunable (but fixed here) thresholds.
+The goal is not to diagnose in the app; it’s to triage by producing an accurate, calibrated probability of disease so staff can fast-track high-risk, review medium-risk, and safely monitor low-risk patients.
+So, Calibrate probabilities; explain each prediction; monitor fairness; keep PHI out; and use tunable (but fixed for demo) thresholds.
+
+### Target and prediction
+The dataset label is target where 1 = disease present, 0 = no disease (in the source data).
+The model predicts a calibrated probability
+    p = P(disease present | inputs)
+    not a hard yes/no.
+The app then maps p → action bands using your demo policy:
+    Low < 7%, Medium 7–35%, High ≥ 35%.
+This supports operational decisions (who to fast-track) while avoiding the claim of a clinical diagnosis.
+> If a binary decision is required, a single threshold can be applied (e.g., cost-based or capacity-based). It intentionally do not show a “disease: yes/no” label in the UI to avoid over-claiming diagnosis; it shows probability + bands for triage.
+
+### Why this solves the challenge
+Calibrated probabilities (reliability curve near diagonal) → a “30%” truly means ~30%, enabling defendable thresholds.
+Action bands reflect clinic capacity and miss tolerance (your 7%/35% demo policy).
+Explanations show why a case is high/medium/low → safer adoption.
+Fairness slices surface cohorts needing attention (e.g., >60 years has lower discrimination).
+Operational value: small reductions in unnecessary follow-ups at fixed sensitivity translate to measurable dollar and time savings.
 
 ### Dataset
 Loaded file rows: **{RAW_N}**. After removing duplicates used for modeling/analysis: **{DEDUP_N}**.  
@@ -386,6 +405,12 @@ keep **High** a smaller subset to fast-track, and make **Low** truly low risk.
 Example: if a miss (FN) is about **10×** a false alarm (FP), then `t* ≈ 1/11 ≈ 0.09`.
 
 Default value ranges are **7% / 35%** in this demo. Replace them with site-specific thresholds derived from **your** validation data, capacity, and risk tolerance.
+
+### What does the model output
+- A calibrated probability that the dataset’s target would be 1 (disease present) for a patient with the given inputs. 
+- The app purposefully displays probability + action bands (Low/Medium/High) for triage decisions. It does not present a diagnostic “yes/no.” 
+- The bands use my demo policy Low < 7%, High ≥ 35% and can be replaced with site-specific cutoffs based on capacity and risk tolerance.
+
 """)
     st.markdown("""
 ### Glossary
@@ -705,15 +730,32 @@ elif page == "8) Privacy & Trust":
 else:
     st.subheader("Page 9 — Impact & Recommendations")
     st.markdown("""
-### Summary & Conclusions
-- **Model quality:** **AUC = {auc:.3f}**, **AUPRC = {aupr:.3f}**, **Brier = {brier:.3f}**, **AUC 95% CI = [{lo_ci:.3f}, {hi_ci:.3f}]**.  
-- **Calibration:** good after isotonic fitting → probabilities are usable for operational bands.  
-- **Equity watchpoint:** older patients (>60) show lower discrimination (**AUC {age_gt60:.3f}**) vs **45–60** (**AUC {age_45_60:.3f}**).
-
 ### What we actually solved
 - **Business problem:** crowded clinics need to **prioritize** who gets faster work-up.  
 - **Our approach:** provide a **calibrated probability** (not just a score), a **clear banding policy**, and **per-case explanations** so staff understand the drivers.  
 - **Outcome:** staff can route **High** cases sooner, safely **monitor Low**, and investigate **Medium** with context — reducing unnecessary follow-ups while keeping sensitivity.
+
+### Key feature findings (what drives risk in this model)
+- The strongest risk-increasing features are higher ST depression (oldpeak), abnormal thal (reversible/fixed defect), more vessels by fluoroscopy (ca), downsloping ST slope, exercise-induced angina (exang=1), older age, and rest ECG abnormalities.
+- Lower max heart rate (thalach) is protective (higher fitness reduces risk).
+- Chest-pain type: asymptomatic (cp=3) trends higher risk vs typical/atypical pain; direction is dataset-specific.
+- Blood pressure and cholesterol contribute positively at higher values but are weaker than the ECG- and perfusion-related features.
+***Note: These are predictive associations from SHAP on the calibrated Random Forest; they are not causal claims.***
+
+### Summary & Conclusions
+- **Built a calibrated triage model:** Random Forest as the primary classifier with Logistic Regression as a baseline; final probabilities calibrated via isotonic regression to make risk scores usable in operations.
+- **Auditable decisions:** per-prediction feature contributions make outputs explainable; fairness slices are monitored, with an early watchpoint for patients age > 60.
+- **Operational impact (illustrative):** In a 2,000-visit/month clinic, trimming unnecessary follow-ups by 5–8% at maintained sensitivity translates to an estimated $9k–$14k/month in savings (actuals depend on local follow-up costs and workflows).
+- **Model quality (test set):** Strong discrimination and reliability with:
+    AUC = {auc:.3f}, AUPRC = {aupr:.3f}, Brier = {brier:.3f}, AUC 95% CI = [{lo_ci:.3f}, {hi_ci:.3f}].
+- Calibration: good post-isotonic fitting—predicted probabilities align with observed risk, enabling threshold-based actions.
+- **Action bands for triage (demo cutoffs):**
+    Low: p < 7% → routine care
+    Medium: 7–35% → clinician review / follow-ups as needed
+    High: > 35% → prioritize assessment and risk management
+    (Bands are for workflow support, not diagnosis.)
+- **Equity watchpoint:** older patients show lower discrimination (AUC {age_gt60:.3f}) relative to ages 45–60 (AUC {age_45_60:.3f}); this cohort is flagged for ongoing monitoring and potential threshold or workflow adjustments.
+***Bottom line: a calibrated, transparent triage tool to support prioritization and resource use—not a diagnostic device.***
 
 ### Operational Value (order-of-magnitude)
 - Assume **2,000 visits/month** and **15%** suspected cardiac → **300** triage cases.  

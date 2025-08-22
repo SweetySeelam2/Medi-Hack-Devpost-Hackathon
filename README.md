@@ -10,9 +10,36 @@
 
 ---
 
-## ✨ Why this matters
-In real clinics, triage is noisy and resources are tight. Even a small lift in **calibrated** risk stratification can shorten time-to-care and reduce avoidable downstream testing.  
-**HeartRisk Assist** gives a **calibrated probability** of cardiac risk, clear **Low/Medium/High bands**, **per-patient explanations**, and simple **fairness** checks—inside one lightweight Streamlit app.
+## Business Challenge
+
+Clinics must prioritize suspected-cardiac patients when resources and time are limited. The goal is not to diagnose in the app; it’s to triage by producing an accurate, calibrated probability of disease so staff can fast-track high-risk, review medium-risk, and safely monitor low-risk patients.
+
+---
+
+## Blurb For Judges
+
+- Trained a Random Forest (with Logistic Regression as a baseline) and calibrated it with isotonic fitting to predict the probability of heart disease presence. 
+- On test data it achieves AUC ≈ 0.878, AUPRC ≈ 0.886, and shows good calibration. 
+- Then converted the probability into Low/Medium/High action bands (demo cutoffs 7% / 35%) to support triage, not diagnosis. 
+- Explanations (feature contributions) make decisions auditable; fairness slices flag age >60 for monitoring. 
+- In a 2,000-visit/month clinic, trimming unnecessary follow-ups by 5–8% at maintained sensitivity saves about $9k–$14k/month. 
+- This is a calibrated, transparent triage tool, not a diagnostic device.
+
+---
+
+## Target and prediction
+
+- The dataset label is target where 1 = disease present, 0 = no disease (in the source data).
+
+- The model predicts a calibrated probability
+    p = P(disease present | inputs)
+    not a hard yes/no.
+
+- The app then maps p → action bands using your demo policy:
+    Low < 7%, Medium 7–35%, High ≥ 35%.
+    This supports operational decisions (who to fast-track) while avoiding the claim of a clinical diagnosis.
+
+> If a binary decision is required, a single threshold can be applied (e.g., cost-based or capacity-based). You intentionally do not show a “disease: yes/no” label in the UI to avoid over-claiming diagnosis; you show probability + bands for triage.
 
 ---
 
@@ -21,7 +48,23 @@ In real clinics, triage is noisy and resources are tight. Even a small lift in *
 - **Explains** each prediction (SHAP or robust fallbacks) so I can show **what pushed risk up or down**.
 - **Monitors fairness** with slice AUCs by **sex**, **age buckets**, and **chest-pain type**.
 - **Shows model quality** (ROC, PR, calibration) with a **95% CI for AUC**.
-- **Respects privacy**: public, de-identified data; no PHI; runs locally or on your own server.
+- **Respects privacy**: public, de-identified data; no PHI; runs locally or on our own server.
+
+---
+
+## 💡 Why this solves the challenge
+
+- Calibration → trust: a “30%” score means ~30% observed risk (reliability curve near the diagonal), enabling defendable thresholds.
+- Action bands (demo cutoffs 7% / 35%) align with clinic capacity and acceptable miss rates.
+- Explanations clarify why a case is high/medium/low, supporting safer adoption.
+- Fairness slices highlight cohorts needing attention (e.g., age > 60 with lower discrimination).
+- Operational value: small reductions in unnecessary follow-ups at fixed sensitivity translate into measurable time and cost savings.
+
+---
+
+## ✨ Why this matters
+In real clinics, triage is noisy and resources are tight. Even a small lift in **calibrated** risk stratification can shorten time-to-care and reduce avoidable downstream testing.  
+**HeartRisk Assist** gives a **calibrated probability** of cardiac risk, clear **Low/Medium/High bands**, **per-patient explanations**, and simple **fairness** checks—inside one lightweight Streamlit app.
 
 ---
 
@@ -48,22 +91,6 @@ Example: if a miss (FN) is about **10×** a false alarm (FP), then `t* ≈ 1/11 
 
 ---
 
-## 🧠 Key results (test set)
-- **AUC:** 0.878  
-- **AUPRC:** 0.886  
-- **Brier score:** 0.144  
-- **AUC 95% CI:** [0.789, 0.949]  
-- **Slice AUCs:**  
-  - Sex: female 0.846, male 0.871  
-  - Age buckets: 45–60 → 0.878; >60 → 0.752  
-  - Chest pain type (cp=0): 0.849
-
-These align with `artifacts/roc.png`, `artifacts/pr.png`, `artifacts/reliability.png`, and `artifacts/shap_summary.png`.
-
-> **Interpretation:** The model is useful (AUC≈0.88), reasonably precise over recall (AUPRC≈0.89), and **probabilities are trustworthy** after isotonic fitting (Brier≈0.14). Older patients (>60 age slice) shows lower discrimination — an ops watchpoint, flagged for threshold audits and more data collection.
-
----
-
 ## 🗂 Dataset
 - **Source:** Kaggle Heart Disease dataset (public, de-identified): https://www.kaggle.com/datasets/johnsmith88/heart-disease-dataset  
 - **Rows used:** 302 (**deduplicated feature rows** from the original CSV to avoid leakage/duplicates).  
@@ -87,13 +114,47 @@ These align with `artifacts/roc.png`, `artifacts/pr.png`, `artifacts/reliability
 
 ---
 
+## 🧠 Key results (test set)
+- **AUC:** 0.878  
+- **AUPRC:** 0.886  
+- **Brier score:** 0.144  
+- **AUC 95% CI:** [0.789, 0.949]  
+- **Slice AUCs:**  
+  - Sex: female 0.846, male 0.871  
+  - Age buckets: 45–60 → 0.878; >60 → 0.752  
+  - Chest pain type (cp=0): 0.849
+
+These results are derived from `artifacts/roc.png`, `artifacts/pr.png`, `artifacts/reliability.png`, and `artifacts/shap_summary.png`.
+
+---
+
+## 🧪 Interpreting the Results
+
+- **Overall performance:** Discrimination is strong (AUC ≈ 0.88), precision–recall is solid (AUPRC ≈ 0.89), and post–isotonic calibration is good (Brier ≈ 0.14).
+
+- **Calibration meaning:** A calibrated probability of p% means ~p out of 100 similar patients will have the outcome—this is why thresholds/bands are actionable.
+
+- **Action bands (demo policy):** Low < 7%, Medium 7–35%, High ≥ 35%. In production, set these with clinicians using a principled utility/capacity trade-off (triage support, not diagnosis).
+
+- **Fairness & watchpoints:** The >60 age slice shows lower discrimination (ops watchpoint). If slice AUCs diverge, consider reweighting, targeted data collection, or cohort-specific thresholds, and audit thresholds periodically.
+
+- **Governance:** Track reliability curves and slice metrics over time; recalibrate or retune thresholds if drift appears or capacity/priors change.
+
+---
+
 ## 🖥️ Streamlit app features
+
 - **Triage (Diagnostics):** Enter inputs or click Load sample (High risk) → get calibrated probability and a band using the fixed demo policy (Low < 7%, Medium 7–35%, High ≥ 35%).
   Interpretation text explains “per-100 patients” to make calibration tangible.
+
 - **Explanations:** Vertical bars show what increased (above zero) or reduced (below zero) risk for the current case.
+
 - **Fairness (Ops):** Quick slice AUCs so I can spot cohort gaps.
+
 - **Model Quality:** ROC, PR, calibration curve, and AUC CI (95% CI) to judge utility and trust.
+
 - **Batch Scoring:** Upload CSV → download probabilities + bands for many rows at once.
+
 - **Data Explorer:** Browse the 302-row training sample and push any row to Triage.
 
 ---
@@ -118,28 +179,24 @@ These align with `artifacts/roc.png`, `artifacts/pr.png`, `artifacts/reliability
 ## 🏃 How to run
 
 ```bash
-1) Setup
+1) Setup                                          
+# Windows (PowerShell)                                              
+python -m venv medihack.venv                                               
+medihack.venv\Scripts\activate                                                
 
-# Windows (PowerShell)
-python -m venv medihack.venv
-medihack.venv\Scripts\activate
-
-pip install --upgrade pip
+pip install --upgrade pip                                              
 pip install -r requirements.txt
 
-2) (Optional) Re-train to regenerate artifacts
+2) (Optional) Re-train to regenerate artifacts                                                                                            
+Run the notebook in notebooks/ or:                                                                
+python train.py                                                
+This writes artifacts/model.pkl, artifacts/metrics.json, and plots.                                             
 
-Run the notebook in notebooks/ or:
-
-python train.py
-
-This writes artifacts/model.pkl, artifacts/metrics.json, and plots.
-
-3) Launch the app
-streamlit run app.py
+3) Launch the app                                         
+streamlit run app.py                                                          
 ```
 
-**If you use Jupyter, register the venv:**
+**If you use Jupyter, register the venv:**                                                      
 ```bash
 python -m ipykernel install --user --name=medihack --display-name "Python (medihack)"
 ```
@@ -153,15 +210,6 @@ python -m ipykernel install --user --name=medihack --display-name "Python (medih
 - Streamlit App: https://medi-hack-devpost-hackathon.streamlit.app/
 
 - Video Demo: 
----
-
-## 🧪 Interpreting the outputs
-
-- **Calibrated probability** means “p% ≈ p out of 100 similar patients.” That’s why bands are meaningful.
-
-- **Bands (demo policy):** Low < 7%, Medium 7–35%, High ≥ 35%. In production, set these with clinicians using the principled method above.
-
-- **Fairness:** If slice AUCs diverge (e.g., >60 age bucket), consider reweighting, more data, or cohort-specific thresholds.
 
 ---
 
@@ -169,7 +217,7 @@ python -m ipykernel install --user --name=medihack --display-name "Python (medih
 
 - Assume 2,000 monthly visits, 15% suspected cardiac (≈300 triage cases), $600 average downstream test.
 
-- A calibrated triage that trims unnecessary follow-ups by 5–8% (holding sensitivity) saves $9k–$14.4k/month and frees clinician time
+- A calibrated triage that trims unnecessary follow-ups by 5–8% (holding sensitivity) saves $9k–$14k/month and frees clinician time
 
 ---
 
@@ -200,6 +248,31 @@ python -m ipykernel install --user --name=medihack --display-name "Python (medih
 - Global seed: RANDOM_STATE = 42
 
 - Artifacts stored in artifacts/ with metrics for traceability.
+
+---
+
+## Summary
+
+- **Built a calibrated triage model:** Random Forest as the primary classifier with Logistic Regression as a baseline; final probabilities calibrated via isotonic regression to make risk scores usable in operations.
+
+- **Auditable decisions:** per-prediction feature contributions make outputs explainable; fairness slices are monitored, with an early watchpoint for patients age > 60.
+
+- **Operational impact (illustrative):** In a 2,000-visit/month clinic, trimming unnecessary follow-ups by 5–8% at maintained sensitivity translates to an estimated $9k–$14k/month in savings (actuals depend on local follow-up costs and workflows).
+
+- **Model quality (test set):** Strong discrimination and reliability with:
+    AUC = {auc:.3f}, AUPRC = {aupr:.3f}, Brier = {brier:.3f}, AUC 95% CI = [{lo_ci:.3f}, {hi_ci:.3f}].
+
+- Calibration: good post-isotonic fitting—predicted probabilities align with observed risk, enabling threshold-based actions.
+
+- **Action bands for triage (demo cutoffs):**
+    Low: p < 7% → routine care
+    Medium: 7–35% → clinician review / follow-ups as needed
+    High: > 35% → prioritize assessment and risk management
+    (Bands are for workflow support, not diagnosis.)
+
+- **Equity watchpoint:** older patients show lower discrimination (AUC {age_gt60:.3f}) relative to ages 45–60 (AUC {age_45_60:.3f}); this cohort is flagged for ongoing monitoring and potential threshold or workflow adjustments.
+
+***Bottom line: a calibrated, transparent triage tool to support prioritization and resource use—not a diagnostic device.***
 
 ---
 
