@@ -634,11 +634,11 @@ elif page == "6) Data Explorer":
 
         st.markdown("### Try a dataset row in TRIAGE")
         st.caption(
-            f"Select a row index **(0–{n-1})** from the de-duplicated training CSV and send it to **2) Triage**. "
+            f"Select a Patient ID (row index) **(0–{n-1})** from the de-duplicated training CSV and send it to **2) Triage**. "
             "Each row represents a single **patient encounter** with the input measurements above. "
             "Sending it to TRIAGE lets you see how a real profile scores and which features drive that decision."
         )
-        idx = st.selectbox(f"Row index (0–{n-1}):", options=list(range(n)), index=min(4, n-1))
+        idx = st.selectbox(f"Patient ID (Row index) (0–{n-1}):", options=list(range(n)), index=min(4, n-1))
         if st.button("Send selected row to TRIAGE"):
             push_row_to_triage(DF_VIEW.iloc[int(idx)][FEATURES].to_dict())
             st.rerun()
