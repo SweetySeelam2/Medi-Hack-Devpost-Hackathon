@@ -340,6 +340,7 @@ def fill_sample(row_dict):
         else:
             clean[k] = v
     st.session_state["prefill_vals"] = clean  # used by the form as defaults
+    st.session_state["force_prefill"] = True  # <-- ensure widgets adopt these values on next run
 
 def queue_nav(page_name: str):
     st.session_state["pending_nav"] = page_name
@@ -362,6 +363,7 @@ def push_row_to_triage(row_dict):
         else:
             clean[k] = v
     st.session_state["prefill_vals"] = clean
+    st.session_state["force_prefill"] = True  # <-- ensure widgets update
     queue_nav("2) Triage (Diagnostics)")
 
 # ---------- Sidebar (fixed policy + clear legends) ----------
@@ -530,6 +532,12 @@ elif page == "2) Triage (Diagnostics)":
 
     prefill = st.session_state.get("prefill_vals", {})
 
+    # ---- NEW: force widget state from prefill (runs BEFORE widgets are created) ----
+    if st.session_state.get("force_prefill", False) and prefill:
+        for k, v in prefill.items():
+            st.session_state[f"w_{k}"] = int(v) if k in CATS else float(v)
+        st.session_state["force_prefill"] = False
+
     with st.form("triage_form", clear_on_submit=False):
         cols = st.columns(3)
         vals = {}
@@ -542,7 +550,7 @@ elif page == "2) Triage (Diagnostics)":
                         index=list(CATS[f].keys()).index(default_code) if default_code in CATS[f] else 0,
                         format_func=lambda k, _f=f: CATS[_f][k],
                         help=tips.get(f, ""),
-                        key=f"w_{f}",   # <-- NAMESPACED WIDGET KEY
+                        key=f"w_{f}",
                     )
                     st.caption(tips.get(f, ""))
                     st.caption(option_caption(f))
@@ -556,7 +564,7 @@ elif page == "2) Triage (Diagnostics)":
                         max_value=float(meta["max"]),
                         step=float(meta["step"]),
                         help=tips.get(f, ""),
-                        key=f"w_{f}",   # <-- NAMESPACED WIDGET KEY
+                        key=f"w_{f}",
                     )
                     st.caption(tips.get(f, ""))
 
@@ -596,7 +604,7 @@ elif page == "2) Triage (Diagnostics)":
     if st.button("Load high-risk sample", type="secondary",
                  help="Loads a **High-band** profile (≥ 35%) when possible; otherwise the highest-risk valid profile for this model."):
         row, pr = find_or_make_high_risk(DEFAULT_HI)
-        fill_sample(row)  # set prefill_vals only (no direct widget writes)
+        fill_sample(row)  # set prefill_vals + force_prefill (no direct widget writes)
         st.session_state["last_inputs"] = st.session_state["prefill_vals"]
         st.session_state["last_prob"] = pr
         st.rerun()
