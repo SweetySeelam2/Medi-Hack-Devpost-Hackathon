@@ -532,7 +532,7 @@ elif page == "2) Triage (Diagnostics)":
 
     prefill = st.session_state.get("prefill_vals", {})
 
-    # ---- NEW: force widget state from prefill (runs BEFORE widgets are created) ----
+    # ---- force widget state from prefill (runs BEFORE widgets are created) ----
     if st.session_state.get("force_prefill", False) and prefill:
         for k, v in prefill.items():
             st.session_state[f"w_{k}"] = int(v) if k in CATS else float(v)
@@ -601,12 +601,70 @@ elif page == "2) Triage (Diagnostics)":
             f"- **Next:** open **page 3 Explanations** to see which features pushed the risk up or down for this case."
         )
 
+    # ---------- Load high-risk sample (borderline-high, not saturated at 100%) ----------
     if st.button("Load high-risk sample", type="secondary",
-                 help="Loads a **High-band** profile (≥ 35%) when possible; otherwise the highest-risk valid profile for this model."):
+                 help="Loads a **High-band** profile (≥ 35%), tuned to avoid saturated 100% while staying in High."):
+        # 1) Get a high-risk candidate
         row, pr = find_or_make_high_risk(DEFAULT_HI)
-        fill_sample(row)  # set prefill_vals + force_prefill (no direct widget writes)
+
+        # 2) If it's saturated (e.g., 1.00), gently tune a couple of *directionally protective* knobs
+        #    to bring p into a realistic High band while keeping p ≥ DEFAULT_HI.
+        TARGET_MAX = 0.95    # upper display target for demo
+        MIN_HIGH   = DEFAULT_HI
+
+        def _score(d):
+            return float(MODEL.predict_proba(pd.DataFrame([d])[FEATURES])[:, 1])
+
+        def _tune_borderline_high(profile, p0, target_max=TARGET_MAX, min_high=MIN_HIGH, iters=40):
+            prof = profile.copy()
+            p = float(p0)
+
+            # Helpers: clamp within numeric ranges
+            def _clamp(name, val):
+                m = NUM_META[name]
+                return float(np.clip(val, m["min"], m["max"]))
+
+            # Try lowering oldpeak and raising thalach (both protective),
+            # optionally nudging down trestbps/chol. Keep p ≥ min_high.
+            for _ in range(iters):
+                if p <= target_max and p >= min_high:
+                    break
+
+                improved = False
+                # candidate tweaks in descending strength
+                tweaks = []
+                if "oldpeak" in prof:
+                    tweaks.append(("oldpeak", -0.2))
+                if "thalach" in prof:
+                    tweaks.append(("thalach", +5.0))
+                if "trestbps" in prof:
+                    tweaks.append(("trestbps", -5.0))
+                if "chol" in prof:
+                    tweaks.append(("chol", -10.0))
+
+                for k, step in tweaks:
+                    new_prof = prof.copy()
+                    new_prof[k] = _clamp(k, prof[k] + step)
+                    p_new = _score(new_prof)
+                    # accept only moves that reduce p and keep us in High
+                    if p_new < p and p_new >= min_high - 1e-6:
+                        prof, p = new_prof, p_new
+                        improved = True
+                        if p <= target_max:
+                            break
+                if not improved:
+                    break  # can't safely reduce further and stay in High
+            return prof, p
+
+        if pr > TARGET_MAX:
+            row, pr = _tune_borderline_high(row, pr)
+
+        # 3) Prefill + compute/remember final probability
+        fill_sample(row)  # sets prefill + force_prefill
         st.session_state["last_inputs"] = st.session_state["prefill_vals"]
-        st.session_state["last_prob"] = pr
+        st.session_state["last_prob"] = float(
+            MODEL.predict_proba(pd.DataFrame([st.session_state["prefill_vals"]])[FEATURES])[:, 1]
+        )
         st.rerun()
 
     license_footer()
