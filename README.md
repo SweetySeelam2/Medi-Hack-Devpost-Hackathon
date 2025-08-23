@@ -36,7 +36,7 @@ Clinics must prioritize suspected-cardiac patients when resources and time are l
     not a hard yes/no.
 
 - The app then maps p → action bands using your demo policy:
-    Low < 7%, Medium 7–35%, High ≥ 35%.
+    Low < 7%, Medium 7–35%, High > 35%.
     This supports operational decisions (who to fast-track) while avoiding the claim of a clinical diagnosis.
 
 > If a binary decision is required, a single threshold can be applied (e.g., cost-based or capacity-based). You intentionally do not show a “disease: yes/no” label in the UI to avoid over-claiming diagnosis; you show probability + bands for triage.
@@ -134,7 +134,7 @@ These results are derived from `artifacts/roc.png`, `artifacts/pr.png`, `artifac
 
 - **Calibration meaning:** A calibrated probability of p% means ~p out of 100 similar patients will have the outcome - this is why thresholds/bands are actionable.
 
-- **Action bands (demo policy):** Low < 7%, Medium 7–35%, High ≥ 35%. In production, set these with clinicians using a principled utility/capacity trade-off (triage support, not diagnosis).
+- **Action bands (demo policy):** Low < 7%, Medium 7–35%, High > 35%. In production, set these with clinicians using a principled utility/capacity trade-off (triage support, not diagnosis).
 
 - **Fairness & watchpoints:** The >60 age slice shows lower discrimination (ops watchpoint). If slice AUCs diverge, consider reweighting, targeted data collection, or cohort-specific thresholds, and audit thresholds periodically.
 
@@ -144,7 +144,7 @@ These results are derived from `artifacts/roc.png`, `artifacts/pr.png`, `artifac
 
 ## 🖥️ Streamlit app features
 
-- **Triage (Diagnostics):** Enter inputs or click Load sample (High risk) → get calibrated probability and a band using the fixed demo policy (Low < 7%, Medium 7–35%, High ≥ 35%).
+- **Triage (Diagnostics):** Enter inputs or click Load sample (High risk) → get calibrated probability and a band using the fixed demo policy (Low < 7%, Medium 7–35%, High > 35%).
   Interpretation text explains “per-100 patients” to make calibration tangible.
 
 - **Explanations:** Vertical bars show what increased (above zero) or reduced (below zero) risk for the current case.

@@ -36,7 +36,7 @@ Clinics must prioritize suspected-cardiac patients when resources and time are l
     not a hard yes/no.
 
 - The app then maps p → action bands using your demo policy:
-    Low < 7%, Medium 7–35%, High ≥ 35%.
+    Low < 7%, Medium 7–35%, High > 35%.
     This supports operational decisions (who to fast-track) while avoiding the claim of a clinical diagnosis.
 
 > If a binary decision is required, apply a single threshold (e.g., capacity- or cost-based). The UI intentionally shows **probability + band** instead of “disease: yes/no”.
@@ -72,7 +72,7 @@ Triage lines are crowded and risk estimates vary. **Calibration** turns scores i
 - **Modeling:** `ColumnTransformer` (scale numeric + one-hot categoricals) → **Random Forest (final)** and **Logistic Regression (baseline)** → **isotonic calibration** on a held-out fold → test evaluation.
 - **Explainability:** `shap.TreeExplainer` for RF, `shap.LinearExplainer` for LR, with robust fallbacks if SHAP is not available.
 - **App:** Streamlit multi-page UX (Triage, Explanations, Fairness, Model Quality, Data Explorer, Batch Scoring).  
-- **Threshold policy:** demo defaults **Low < 7%**, **High ≥ 35%** with a **principled method** documented for choosing site-specific cutoffs.
+- **Threshold policy:** demo defaults **Low < 7%**, **High > 35%** with a **principled method** documented for choosing site-specific cutoffs.
 
 ---
 

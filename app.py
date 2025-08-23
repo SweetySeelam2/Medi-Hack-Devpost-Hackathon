@@ -369,7 +369,7 @@ def push_row_to_triage(row_dict):
 # ---------- Sidebar (fixed policy + clear legends) ----------
 st.sidebar.header("Risk Policy (fixed threshold ranges for demo)")
 DEFAULT_LO = 0.07   # Low if p < 7%
-DEFAULT_HI = 0.35   # High if p ≥ 35%
+DEFAULT_HI = 0.35   # High if p > 35%
 st.session_state["lo"] = float(DEFAULT_LO)
 st.session_state["hi"] = float(DEFAULT_HI)
 
@@ -454,7 +454,7 @@ The model predicts a calibrated probability
     p = P(disease present | inputs)
     not a hard yes/no.
 The app then maps p → action bands using your demo policy:
-    Low < 7%, Medium 7–35%, High ≥ 35%.
+    Low < 7%, Medium 7–35%, High > 35%.
 This supports operational decisions (who to fast-track) while avoiding the claim of a clinical diagnosis.
 > If a binary decision is required, a single threshold can be applied (e.g., cost-based or capacity-based). It intentionally do not show a “disease: yes/no” label in the UI to avoid over-claiming diagnosis; it shows probability + bands for triage.
 
@@ -489,7 +489,7 @@ Default value ranges are **7% / 35%** in this demo. Replace them with site-speci
 ### What does the model output
 - A calibrated probability that the dataset’s target would be 1 (disease present) for a patient with the given inputs. 
 - The app purposefully displays probability + action bands (Low/Medium/High) for triage decisions. It does not present a diagnostic “yes/no.” 
-- The bands use my demo policy Low < 7%, High ≥ 35% and can be replaced with site-specific cutoffs based on capacity and risk tolerance.
+- The bands use my demo policy Low < 7%, High > 35% and can be replaced with site-specific cutoffs based on capacity and risk tolerance.
 
 """)
     st.markdown("""
@@ -603,7 +603,7 @@ elif page == "2) Triage (Diagnostics)":
 
     # ---------- Load high-risk sample (prefer realistic High from dataset; avoid saturated 100%) ----------
     if st.button("Load high-risk sample", type="secondary",
-                 help="Loads a **High-band** profile (≥ 35%), preferring realistic probabilities (≤95%)."):
+                 help="Loads a **High-band** profile (> 35%), preferring realistic probabilities (≤95%)."):
         TARGET_MAX = 0.95  # cap for display realism; still High (≥ DEFAULT_HI)
         MIN_HIGH   = DEFAULT_HI
 
