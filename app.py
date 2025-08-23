@@ -1,4 +1,4 @@
-# app.py — HeartRisk Assist (Medi-Hack 2025)
+# app.py — HeartRisk Assist (Medi-Hack 2025) 
 import json
 from pathlib import Path
 
@@ -63,7 +63,7 @@ CATS = {
     "restecg":{0: "Normal (0)", 1: "ST-T wave abnormality (1)", 2: "Left ventricular hypertrophy (2)"},
     "exang":  {0: "No (0)", 1: "Yes (1)"},
     "slope":  {0: "Upsloping (0)", 1: "Flat (1)", 2: "Downsloping (2)"},
-    "ca":     {0: "0", 1: "1", 2: "2", 3: "3"},
+    "ca":     {0: "0", 1: "1", 2: "2", 3: "3", 4: "4"},  # ← allow 4 (exists in some UCI rows)
     "thal":   {0: "Unknown (0)", 1: "Fixed defect (1)", 2: "Normal (2)", 3: "Reversible defect (3)"},
 }
 NUM_META = {
@@ -223,52 +223,118 @@ def _clip_num(name, val):
     meta = NUM_META[name]
     return float(np.clip(val, meta["min"], meta["max"]))
 
+def _clip_cat(name, val):
+    keys = sorted(CATS[name].keys())
+    v = int(val)
+    return v if v in keys else keys[-1]
+
 def find_or_make_high_risk(hi_thresh=0.35):
     """
-    Try: (1) seed sample, (2) boosted extremes grid, (3) highest-risk row in DF_VIEW.
-    Return (row_dict, prob).
+    Return (row_dict, prob) that hits High (≥ hi_thresh) if at all possible.
+    Strategy:
+      1) Try seed.
+      2) Try highest row in dataset.
+      3) Grid over realistic extremes.
+      4) Max-risk synthetic profile (valid ranges).
+      5) Randomized search around extremes (early-stop).
     """
-    # 1) seed
-    r = SAMPLE_SEED.copy()
-    p = _predict_row(r)
-    if p >= hi_thresh:
-        return r, p
+    def _score(d): return _predict_row(d)
 
-    # 2) small grid search over realistic extremes
-    ages     = [70, 80, 90]
-    chols    = [310, 400, 520]
-    bps      = [170, 190, 210]
-    thalachs = [60, 75, 90]
-    oldpeaks = [4.0, 5.0, 6.5]
-    best = (p, r.copy())
+    # 1) seed
+    best_row = SAMPLE_SEED.copy()
+    best_p = _score(best_row)
+    if best_p >= hi_thresh:
+        return best_row, best_p
+
+    # 2) dataset top
+    if DF_VIEW is not None and len(DF_VIEW) > 0:
+        proba = MODEL.predict_proba(DF_VIEW[FEATURES])[:, 1]
+        i = int(np.argmax(proba))
+        cand = DF_VIEW.iloc[i][FEATURES].to_dict()
+        p = float(proba[i])
+        if p > best_p:
+            best_row, best_p = cand.copy(), p
+        if p >= hi_thresh:
+            return cand, p
+
+    # 3) small grid on strong drivers
+    ages     = [70, 80, 90, NUM_META["age"]["max"]]
+    chols    = [310, 400, 520, NUM_META["chol"]["max"]]
+    bps      = [170, 190, 210, NUM_META["trestbps"]["max"]]
+    thalachs = [90, 75, 60, NUM_META["thalach"]["min"]]
+    oldpeaks = [4.0, 5.0, 6.5, NUM_META["oldpeak"]["max"]]
     for a in ages:
         for c in chols:
             for b in bps:
                 for hr in thalachs:
                     for op in oldpeaks:
-                        cand = {
-                            "age": _clip_num("age", a), "sex": 1, "cp": 3, "trestbps": _clip_num("trestbps", b),
-                            "chol": _clip_num("chol", c), "fbs": 1, "restecg": 2, "thalach": _clip_num("thalach", hr),
-                            "exang": 1, "oldpeak": _clip_num("oldpeak", op), "slope": 2, "ca": 3, "thal": 3
-                        }
-                        pr = _predict_row(cand)
-                        if pr > best[0]:
-                            best = (pr, cand.copy())
-                        if pr >= hi_thresh:
-                            return cand, pr
-    # 3) fallback: highest predicted in dataset view
-    if DF_VIEW is not None and len(DF_VIEW) > 0:
-        proba = MODEL.predict_proba(DF_VIEW[FEATURES])[:, 1]
-        idx = int(np.argmax(proba))
-        cand = DF_VIEW.iloc[idx][FEATURES].to_dict()
-        pr = float(proba[idx])
-        return cand, pr
-    return r, p
+                        for rest in [2, 1]:
+                            for ca_v in ([4,3,2,1,0] if 4 in CATS["ca"] else [3,2,1,0]):
+                                for th in [3,1,0]:
+                                    cand = {
+                                        "age": _clip_num("age", a),
+                                        "sex": 1, "cp": 3, "trestbps": _clip_num("trestbps", b),
+                                        "chol": _clip_num("chol", c), "fbs": 1, "restecg": rest,
+                                        "thalach": _clip_num("thalach", hr), "exang": 1,
+                                        "oldpeak": _clip_num("oldpeak", op), "slope": 2,
+                                        "ca": _clip_cat("ca", ca_v), "thal": th
+                                    }
+                                    p = _score(cand)
+                                    if p > best_p:
+                                        best_row, best_p = cand.copy(), p
+                                    if p >= hi_thresh:
+                                        return cand, p
+
+    # 4) deterministic "max-risk" within allowed ranges
+    max_risk = {
+        "age": NUM_META["age"]["max"], "sex": 1, "cp": 3,
+        "trestbps": NUM_META["trestbps"]["max"], "chol": NUM_META["chol"]["max"],
+        "fbs": 1, "restecg": 2, "thalach": NUM_META["thalach"]["min"],
+        "exang": 1, "oldpeak": NUM_META["oldpeak"]["max"], "slope": 2,
+        "ca": 4 if 4 in CATS["ca"] else 3, "thal": 3
+    }
+    p = _score(max_risk)
+    if p > best_p:
+        best_row, best_p = max_risk.copy(), p
+    if p >= hi_thresh:
+        return max_risk, p
+
+    # 5) randomized search near extremes (early stop)
+    rng = np.random.default_rng(42)
+    for _ in range(2000):
+        cand = {
+            "age": float(rng.integers(75, NUM_META["age"]["max"]+1)),
+            "sex": 1,
+            "cp": 3,
+            "trestbps": float(rng.integers(170, NUM_META["trestbps"]["max"]+1)),
+            "chol": float(rng.integers(300, NUM_META["chol"]["max"]+1)),
+            "fbs": 1,
+            "restecg": int(rng.choice([2,1])),
+            "thalach": float(rng.integers(NUM_META["thalach"]["min"], 91)),
+            "exang": 1,
+            "oldpeak": float(rng.uniform(4.0, NUM_META["oldpeak"]["max"])),
+            "slope": 2,
+            "ca": int(rng.choice([4,3,2,1,0] if 4 in CATS["ca"] else [3,2,1,0])),
+            "thal": int(rng.choice([3,1,0])),
+        }
+        p = _score(cand)
+        if p > best_p:
+            best_row, best_p = cand.copy(), p
+        if p >= hi_thresh:
+            return cand, p
+
+    # If still below hi_thresh, return the best we could find.
+    return best_row, best_p
 
 def fill_sample(row_dict):
-    """Fill the TRIAGE form with a given profile."""
+    """Fill the TRIAGE form with a given profile (clip to valid ranges)."""
     for k, v in row_dict.items():
-        st.session_state[k] = int(v) if k in CATS else float(v)
+        if k in CATS:
+            st.session_state[k] = _clip_cat(k, v)
+        elif k in NUM_META:
+            st.session_state[k] = _clip_num(k, v)
+        else:
+            st.session_state[k] = v
 
 def queue_nav(page_name: str):
     st.session_state["pending_nav"] = page_name
@@ -513,7 +579,7 @@ elif page == "2) Triage (Diagnostics)":
         )
 
     if st.button("Load high-risk sample", type="secondary",
-                 help="Auto-loads a profile that scores in **High** (≥ 35%) when possible for this trained model."):
+                 help="Loads a **High-band** profile (≥ 35%) when possible; otherwise returns the highest-risk valid profile for this model."):
         row, pr = find_or_make_high_risk(DEFAULT_HI)
         fill_sample(row)
         st.session_state["last_inputs"] = row
