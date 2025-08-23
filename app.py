@@ -559,7 +559,7 @@ elif page == "2) Triage (Diagnostics)":
                     default_val = float(prefill.get(f, SAMPLE_SEED.get(f, 0.0)))
                     vals[f] = st.number_input(
                         meta["label"] if meta["label"] else f,
-                        value=default_val,
+                        value=float(st.session_state.get(f"w_{f}", default_val)),
                         min_value=float(meta["min"]),
                         max_value=float(meta["max"]),
                         step=float(meta["step"]),
