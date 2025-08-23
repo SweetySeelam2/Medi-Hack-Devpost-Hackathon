@@ -63,7 +63,7 @@ CATS = {
     "restecg":{0: "Normal (0)", 1: "ST-T wave abnormality (1)", 2: "Left ventricular hypertrophy (2)"},
     "exang":  {0: "No (0)", 1: "Yes (1)"},
     "slope":  {0: "Upsloping (0)", 1: "Flat (1)", 2: "Downsloping (2)"},
-    "ca":     {0: "0", 1: "1", 2: "2", 3: "3", 4: "4"},  # ← allow 4 (exists in some UCI rows)
+    "ca":     {0: "0", 1: "1", 2: "2", 3: "3", 4: "4"},  # allow 4 if present in your data
     "thal":   {0: "Unknown (0)", 1: "Fixed defect (1)", 2: "Normal (2)", 3: "Reversible defect (3)"},
 }
 NUM_META = {
@@ -327,14 +327,19 @@ def find_or_make_high_risk(hi_thresh=0.35):
     return best_row, best_p
 
 def fill_sample(row_dict):
-    """Fill the TRIAGE form with a given profile (clip to valid ranges)."""
+    """
+    Prepare a profile to pre-fill widgets on next rerun without directly
+    mutating widget keys (avoids Streamlit session_state exceptions).
+    """
+    clean = {}
     for k, v in row_dict.items():
         if k in CATS:
-            st.session_state[k] = _clip_cat(k, v)
+            clean[k] = _clip_cat(k, v)
         elif k in NUM_META:
-            st.session_state[k] = _clip_num(k, v)
+            clean[k] = _clip_num(k, v)
         else:
-            st.session_state[k] = v
+            clean[k] = v
+    st.session_state["prefill_vals"] = clean  # used by the form as defaults
 
 def queue_nav(page_name: str):
     st.session_state["pending_nav"] = page_name
@@ -345,17 +350,24 @@ def apply_pending_nav():
         st.session_state["nav"] = target
 
 def push_row_to_triage(row_dict):
+    """
+    Set only prefill values + nav. Do NOT set widget keys directly.
+    """
+    clean = {}
     for k, v in row_dict.items():
-        st.session_state[k] = v
+        if k in CATS:
+            clean[k] = _clip_cat(k, v)
+        elif k in NUM_META:
+            clean[k] = _clip_num(k, v)
+        else:
+            clean[k] = v
+    st.session_state["prefill_vals"] = clean
     queue_nav("2) Triage (Diagnostics)")
 
 # ---------- Sidebar (fixed policy + clear legends) ----------
 st.sidebar.header("Risk Policy (fixed threshold ranges for demo)")
-# Fixed operational thresholds for action bands (NOT changing the model)
-DEFAULT_LO = 0.07   # Low if p < 7% (safe-to-monitor band when resources are tight)
-DEFAULT_HI = 0.35   # High if p ≥ 35% (smaller subset for rapid work-up)
-
-# store once for downstream pages
+DEFAULT_LO = 0.07   # Low if p < 7%
+DEFAULT_HI = 0.35   # High if p ≥ 35%
 st.session_state["lo"] = float(DEFAULT_LO)
 st.session_state["hi"] = float(DEFAULT_HI)
 
@@ -516,25 +528,27 @@ elif page == "2) Triage (Diagnostics)":
         if key not in CATS: return ""
         return "Options: " + "; ".join(str(v) for v in CATS[key].values())
 
+    prefill = st.session_state.get("prefill_vals", {})
+
     with st.form("triage_form", clear_on_submit=False):
         cols = st.columns(3)
         vals = {}
         for i, f in enumerate(FEATURES):
             with cols[i % 3]:
                 if f in CATS:
-                    default_code = int(st.session_state.get(f, SAMPLE_SEED.get(f, list(CATS[f].keys())[0])))
+                    default_code = int(prefill.get(f, SAMPLE_SEED.get(f, list(CATS[f].keys())[0])))
                     vals[f] = st.selectbox(
                         f, options=list(CATS[f].keys()),
-                        index=list(CATS[f].keys()).index(default_code),
+                        index=list(CATS[f].keys()).index(default_code) if default_code in CATS[f] else 0,
                         format_func=lambda k, _f=f: CATS[_f][k],
                         help=tips.get(f, ""),
-                        key=f,  # bind widget state to feature name
+                        key=f"w_{f}",   # <-- NAMESPACED WIDGET KEY
                     )
                     st.caption(tips.get(f, ""))
                     st.caption(option_caption(f))
                 else:
                     meta = NUM_META.get(f, {"label": f, "min": 0.0, "max": 9999.0, "step": 1.0})
-                    default_val = float(st.session_state.get(f, SAMPLE_SEED.get(f, 0.0)))
+                    default_val = float(prefill.get(f, SAMPLE_SEED.get(f, 0.0)))
                     vals[f] = st.number_input(
                         meta["label"] if meta["label"] else f,
                         value=default_val,
@@ -542,7 +556,7 @@ elif page == "2) Triage (Diagnostics)":
                         max_value=float(meta["max"]),
                         step=float(meta["step"]),
                         help=tips.get(f, ""),
-                        key=f,  # bind widget state to feature name
+                        key=f"w_{f}",   # <-- NAMESPACED WIDGET KEY
                     )
                     st.caption(tips.get(f, ""))
 
@@ -553,6 +567,7 @@ elif page == "2) Triage (Diagnostics)":
         prob = float(MODEL.predict_proba(x)[:, 1])
         st.session_state["last_inputs"] = vals
         st.session_state["last_prob"] = prob
+        st.session_state["prefill_vals"] = vals  # keep the form populated
 
     if "last_prob" in st.session_state:
         lo, hi = DEFAULT_LO, DEFAULT_HI
@@ -579,10 +594,10 @@ elif page == "2) Triage (Diagnostics)":
         )
 
     if st.button("Load high-risk sample", type="secondary",
-                 help="Loads a **High-band** profile (≥ 35%) when possible; otherwise returns the highest-risk valid profile for this model."):
+                 help="Loads a **High-band** profile (≥ 35%) when possible; otherwise the highest-risk valid profile for this model."):
         row, pr = find_or_make_high_risk(DEFAULT_HI)
-        fill_sample(row)
-        st.session_state["last_inputs"] = row
+        fill_sample(row)  # set prefill_vals only (no direct widget writes)
+        st.session_state["last_inputs"] = st.session_state["prefill_vals"]
         st.session_state["last_prob"] = pr
         st.rerun()
 
@@ -592,20 +607,17 @@ elif page == "2) Triage (Diagnostics)":
 elif page == "3) Explanations":
     st.subheader("Page 3 — Why this decision?")
     st.caption("Local explanation for the most recent inputs. If none submitted yet, we use a representative sample.")
-    row = {f: st.session_state.get(f, SAMPLE_SEED.get(f, 0)) for f in FEATURES}
+    # Prefer last inputs; otherwise prefill; otherwise seed
+    last_row = st.session_state.get("last_inputs") or st.session_state.get("prefill_vals")
+    row = last_row if last_row is not None else {f: st.session_state.get(f, SAMPLE_SEED.get(f, 0)) for f in FEATURES}
     x = pd.DataFrame([row])[FEATURES]
     method, contrib = explain_single(x)
 
-    # ---- NEW: dynamic, plain-language narrative tied to Page 2 inputs ----
+    # ---- Dynamic narrative ----
     def _parse_name(feat_name):
-        """
-        From transformed name like 'cat__thal_3' or 'num__oldpeak' return:
-        base='thal', code=3 (int or None), is_cat=True/False
-        """
         name = feat_name
         if "__" in name:
             _, name = name.split("__", 1)
-        # try to split final _<int> as category indicator
         base, code = name, None
         if "_" in name:
             maybe_base, maybe_code = name.rsplit("_", 1)
@@ -616,23 +628,14 @@ elif page == "3) Explanations":
     def _pretty_base(base):
         if base in NUM_META and NUM_META[base].get("label"):
             return NUM_META[base]["label"]
-        # fallback readable
         return base
 
     def _value_text(base, code, row_val):
-        """Human-friendly value string for this patient."""
         if base in CATS:
-            # categorical; show the patient's actual value (not the one-hot column)
-            label = CATS[base].get(int(row_val), str(row_val))
-            return f"{label}"
-        else:
-            meta = NUM_META.get(base, {"label": base})
-            return f"{row_val}"
+            return CATS[base].get(int(row_val), str(row_val))
+        return f"{row_val}"
 
-    if "last_prob" in st.session_state:
-        p = float(st.session_state["last_prob"])
-    else:
-        p = float(MODEL.predict_proba(x)[:, 1])
+    p = float(st.session_state.get("last_prob", MODEL.predict_proba(x)[0, 1]))
     lo, hi = DEFAULT_LO, DEFAULT_HI
     band = risk_band(p, lo, hi)
 
@@ -644,7 +647,6 @@ elif page == "3) Explanations":
     else:
         st.write(f"Explanation method: **{method}**")
 
-        # Vertical signed bar chart (up = higher risk, down = lower); labels straight
         chart = (
             alt.Chart(contrib)
               .mark_bar()
@@ -657,14 +659,10 @@ elif page == "3) Explanations":
         zero_line = alt.Chart(pd.DataFrame({"y":[0]})).mark_rule(strokeDash=[4,4]).encode(y="y:Q")
         st.altair_chart((zero_line + chart).properties(height=420), use_container_width=True)
 
-        # ---- NEW: turn bars into sentences ----
         unit_text = "percentage points" if "Directional" in method else "model-space units"
         c2 = contrib.copy()
         c2["pp"] = c2["contribution"] * (100.0 if "Directional" in method else 1.0)
-        c2[["base", "code", "is_cat"]] = c2["feature"].apply(
-            lambda n: pd.Series(_parse_name(n))
-        )
-        # Keep features that actually matter
+        c2[["base", "code", "is_cat"]] = c2["feature"].apply(lambda n: pd.Series(_parse_name(n)))
         thr = 0.5 if "Directional" in method else 0.01
         top_pos = c2[c2["contribution"] > 0].sort_values("contribution", ascending=False).head(6)
         top_pos = top_pos[abs(top_pos["pp"]) >= thr]
@@ -673,17 +671,13 @@ elif page == "3) Explanations":
 
         def _bullet(row_s):
             base = row_s["base"]
-            code = row_s["code"]
             val = row.get(base, None)
             base_nice = _pretty_base(base)
-            value_str = _value_text(base, code, val) if val is not None else "(n/a)"
+            value_str = _value_text(base, row_s["code"], val) if val is not None else "(n/a)"
             sign = "↑ increases" if row_s["contribution"] > 0 else "↓ decreases"
             amt = abs(row_s["pp"])
             if "Directional" in method:
-                amt_txt = f"{amt:.1f} {unit_text}"
-                # For directional, also translate to per-100 people wording
-                per100 = f" (~{amt:.1f} more per 100 similar patients)"
-                amt_txt = amt_txt + per100
+                amt_txt = f"{amt:.1f} {unit_text} (~{amt:.1f} per 100 similar patients)"
             else:
                 amt_txt = f"{amt:.3f} {unit_text}"
             return f"**{base_nice}** = {value_str}: **{sign} risk** by ~{amt_txt}."
@@ -692,17 +686,14 @@ elif page == "3) Explanations":
         st.markdown(f"- **Overall:** The model estimates **{p:.1%}** risk, which falls in the **{band}** band "
                     f"(policy: Low < {lo:.0%}, Medium {lo:.0%}–{hi:.0%}, High ≥ {hi:.0%}).")
 
-        # Distance to next band
         if band == "Low":
-            to_med = max(0.0, (lo - p) * 100.0)
             st.caption(f"To reach **Medium**, probability would need to increase by about **{(lo-p)*100:.1f} pp**.")
         elif band == "Medium":
             up = (hi - p) * 100.0
             down = (p - lo) * 100.0
-            if up > 0:
-                st.caption(f"To reach **High**, probability would need to increase by about **{up:.1f} pp**. "
-                           f"To fall to **Low**, it would need to decrease by **{down:.1f} pp**.")
-        else:  # High
+            st.caption(f"To reach **High**, probability would need to increase by about **{up:.1f} pp**. "
+                       f"To fall to **Low**, it would need to decrease by **{down:.1f} pp**.")
+        else:
             st.caption(f"This exceeds the High cutoff (≥ {hi:.0%}).")
 
         if len(top_pos) > 0:
