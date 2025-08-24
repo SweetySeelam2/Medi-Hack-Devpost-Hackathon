@@ -590,7 +590,7 @@ elif page == "2) Triage (Diagnostics)":
             relation, cut = "between", f"{lo:.0%} and {hi:.0%}"
             meaning = "Intermediate probability — consider clinician review, additional tests, or short-interval follow-up."
         else:
-            relation, cut = "≥", f"{hi:.0%}"
+            relation, cut = ">", f"{hi:.0%}"
             meaning = "Elevated probability — prioritize faster work-up or referral."
 
         st.metric("Calibrated risk", f"{prob:.1%}")
