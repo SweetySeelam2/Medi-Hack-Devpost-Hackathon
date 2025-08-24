@@ -209,7 +209,7 @@ python -m ipykernel install --user --name=medihack --display-name "Python (medih
 
 - Streamlit App: https://medi-hack-devpost-hackathon.streamlit.app/
 
-- Video Demo: https://www.loom.com/share/54ab407bae644f068b44766350eb8fbd?sid=76a5aed6-9178-4850-ade6-3f4926536c3a
+- Video Demo: [https://www.loom.com/share/54ab407bae644f068b44766350eb8fbd?sid=76a5aed6-9178-4850-ade6-3f4926536c3a](https://youtu.be/14-D1BksfAE)
 
 ---
 
