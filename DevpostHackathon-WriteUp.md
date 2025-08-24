@@ -1,6 +1,7 @@
-# HeartRisk Assist — Calibrated, Fair, Privacy-First Cardiac Triage
+## Project Title
+**HeartRisk Assist — Calibrated, Fair, Privacy-First Cardiac Triage**
 
-### Elevator pitch
+### Elevator pitch (≤30s)
 I built **HeartRisk Assist** to give clinicians a **calibrated probability** of cardiac risk, with **fairness slice metrics** and **point-of-care explanations** in one simple Streamlit app. It’s fast, transparent, and privacy-respecting—ideal for triage support and operations dashboards.
 
 ### Track(s)

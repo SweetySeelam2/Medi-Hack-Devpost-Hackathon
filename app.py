@@ -507,7 +507,7 @@ elif page == "2) Triage (Diagnostics)":
     with st.expander("How to use", expanded=False):
         st.markdown(f"""
 1) Enter the measurements (or click **Load high-risk sample**).  
-2) Press **Assess risk** — you’ll get a **calibrated probability** and an **action band** based on the fixed policy (**Low < {DEFAULT_LO:.0%}**, **Medium {DEFAULT_LO:.0%}–{DEFAULT_HI:.0%}**, **High ≥ {DEFAULT_HI:.0%}**).  
+2) Press **Assess risk** — you’ll get a **calibrated probability** and an **action band** based on the fixed policy (**Low < {DEFAULT_LO:.0%}**, **Medium {DEFAULT_LO:.0%}–{DEFAULT_HI:.0%}**, **High > {DEFAULT_HI:.0%}**).  
 3) See **page 3 Explanations** for what pushed risk **up** or **down**.
         """)
 
@@ -604,7 +604,7 @@ elif page == "2) Triage (Diagnostics)":
     # ---------- Load high-risk sample (prefer realistic High from dataset; avoid saturated 100%) ----------
     if st.button("Load high-risk sample", type="secondary",
                  help="Loads a **High-band** profile (> 35%), preferring realistic probabilities (≤95%)."):
-        TARGET_MAX = 0.95  # cap for display realism; still High (≥ DEFAULT_HI)
+        TARGET_MAX = 0.95  # cap for display realism; still High (> DEFAULT_HI)
         MIN_HIGH   = DEFAULT_HI
 
         def _score(d):
@@ -617,12 +617,12 @@ elif page == "2) Triage (Diagnostics)":
             df = DF_VIEW[FEATURES].copy()
             df["_p"] = p
             # 1) Best High that is not saturated
-            ok = df[(df["_p"] >= min_high) & (df["_p"] <= max_target)]
+            ok = df[(df["_p"] > min_high) & (df["_p"] <= max_target)]
             if len(ok) > 0:
                 r = ok.sort_values("_p", ascending=False).iloc[0]
                 return r[FEATURES].to_dict(), float(r["_p"])
             # 2) Otherwise the *lowest* High (closest to threshold) to keep realism
-            hi = df[df["_p"] >= min_high]
+            hi = df[df["_p"] > min_high]
             if len(hi) > 0:
                 r = hi.sort_values("_p", ascending=True).iloc[0]
                 return r[FEATURES].to_dict(), float(r["_p"])
@@ -635,7 +635,7 @@ elif page == "2) Triage (Diagnostics)":
                 m = NUM_META[name]
                 return float(np.clip(val, m["min"], m["max"]))
             for _ in range(iters):
-                if p <= target_max and p >= min_high:
+                if p <= target_max and p > min_high:
                     break
                 improved = False
                 # Protective nudges (small, safe)
@@ -645,7 +645,7 @@ elif page == "2) Triage (Diagnostics)":
                     trial = prof.copy()
                     trial[k] = _clamp(k, trial[k] + step)
                     p_new = _score(trial)
-                    if p_new < p and p_new >= min_high - 1e-6:
+                    if p_new < p and p_new > min_high - 1e-6:
                         prof, p, improved = trial, p_new, True
                         if p <= target_max:
                             break
