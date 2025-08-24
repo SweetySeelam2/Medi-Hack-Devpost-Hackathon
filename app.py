@@ -230,7 +230,7 @@ def _clip_cat(name, val):
 
 def find_or_make_high_risk(hi_thresh=0.35):
     """
-    Return (row_dict, prob) that hits High (≥ hi_thresh) if at all possible.
+    Return (row_dict, prob) that hits High (> hi_thresh) if at all possible.
     Strategy:
       1) Try seed.
       2) Try highest row in dataset.
@@ -243,7 +243,7 @@ def find_or_make_high_risk(hi_thresh=0.35):
     # 1) seed
     best_row = SAMPLE_SEED.copy()
     best_p = _score(best_row)
-    if best_p >= hi_thresh:
+    if best_p > hi_thresh:
         return best_row, best_p
 
     # 2) dataset top
@@ -254,7 +254,7 @@ def find_or_make_high_risk(hi_thresh=0.35):
         p = float(proba[i])
         if p > best_p:
             best_row, best_p = cand.copy(), p
-        if p >= hi_thresh:
+        if p > hi_thresh:
             return cand, p
 
     # 3) small grid on strong drivers
@@ -282,7 +282,7 @@ def find_or_make_high_risk(hi_thresh=0.35):
                                     p = _score(cand)
                                     if p > best_p:
                                         best_row, best_p = cand.copy(), p
-                                    if p >= hi_thresh:
+                                    if p > hi_thresh:
                                         return cand, p
 
     # 4) deterministic "max-risk" within allowed ranges
@@ -296,7 +296,7 @@ def find_or_make_high_risk(hi_thresh=0.35):
     p = _score(max_risk)
     if p > best_p:
         best_row, best_p = max_risk.copy(), p
-    if p >= hi_thresh:
+    if p > hi_thresh:
         return max_risk, p
 
     # 5) randomized search near extremes (early stop)
@@ -320,7 +320,7 @@ def find_or_make_high_risk(hi_thresh=0.35):
         p = _score(cand)
         if p > best_p:
             best_row, best_p = cand.copy(), p
-        if p >= hi_thresh:
+        if p > hi_thresh:
             return cand, p
 
     # If still below hi_thresh, return the best we could find.
@@ -378,7 +378,7 @@ st.sidebar.markdown(
 **Band mapping (fixed):**  
 - **Low:** Probability (p) \< **{DEFAULT_LO:.0%}**  
 - **Medium:** Probability (p) between **{DEFAULT_LO:.0%}–{DEFAULT_HI:.0%}**  
-- **High:** Probability (p) ≥ **{DEFAULT_HI:.0%}**  
+- **High:** Probability (p) > **{DEFAULT_HI:.0%}**  
 
 These **do not change the model** — they only map the calibrated probability to an operational action band used on **page 2 Triage** and **page 7 Batch Scoring**.  
 **Why these values?** Demo defaults reflect a practical triage stance: keep **High** a smaller group to fast-track, and make **Low** conservative (<7%). In deployment, set bands from your own calibration, capacity, and miss-tolerance.
