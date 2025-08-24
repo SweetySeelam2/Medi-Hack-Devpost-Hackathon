@@ -138,7 +138,7 @@ Plots (ROC, PR, calibration, SHAP) are in `artifacts/`.
 - **Code:** https://github.com/SweetySeelam2/Medi-Hack-Devpost-Hackathon  
 - **Run locally:** `streamlit run app.py` (see README for steps).  
 - **Streamlit App:** https://medi-hack-devpost-hackathon.streamlit.app/  
-- **Demo video:** 
+- **Demo video:** https://youtu.be/14-D1BksfAE
 
 ---
 
